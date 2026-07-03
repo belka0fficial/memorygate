@@ -1,9 +1,27 @@
 def classify_memory(text: str, source_type: str = "user") -> dict:
     lower = text.lower()
 
-    if any(x in lower for x in ["always", "i am", "i like", "i prefer", "my favorite"]):
+    if any(x in lower for x in ["dark humor", "sarcasm", "deadpan", "joke style", "humor style"]):
+        return {
+            "memory_type": "humor_style",
+            "confidence": "medium",
+            "identity_weight": "medium",
+            "summary": text[:280],
+        }
+
+    if any(x in lower for x in ["i prefer", "prefers", "my favorite", "i like", "always", "usually"]) and any(
+        x in lower for x in ["build", "workflow", "before", "architecture", "sidecars"]
+    ):
         return {
             "memory_type": "stable_preference",
+            "confidence": "medium",
+            "identity_weight": "medium",
+            "summary": text[:280],
+        }
+
+    if any(x in lower for x in ["i am", "i'm", "my personality", "my style"]):
+        return {
+            "memory_type": "identity_trait",
             "confidence": "medium",
             "identity_weight": "medium",
             "summary": text[:280],
@@ -14,14 +32,6 @@ def classify_memory(text: str, source_type: str = "user") -> dict:
             "memory_type": "temporary_phase",
             "confidence": "low",
             "identity_weight": "low",
-            "summary": text[:280],
-        }
-
-    if any(x in lower for x in ["joke", "sarcasm", "dark humor", "deadpan"]):
-        return {
-            "memory_type": "humor_style",
-            "confidence": "medium",
-            "identity_weight": "medium",
             "summary": text[:280],
         }
 
