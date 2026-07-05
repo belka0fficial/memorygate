@@ -1,0 +1,23 @@
+from sqlalchemy import String, Text, DateTime, Float, func
+from sqlalchemy.orm import Mapped, mapped_column
+from app.core.db import Base
+import uuid
+
+class Observation(Base):
+    __tablename__ = "observations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String, default="", index=True)
+    observed_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    signal_type: Mapped[str] = mapped_column(String, index=True)  # verbal / tonal / behavioral / physical / timing
+    description: Mapped[str] = mapped_column(Text)
+    raw_context: Mapped[str] = mapped_column(Text, default="")
+
+    hypothesis: Mapped[str] = mapped_column(Text, default="")
+    hypothesis_confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    status: Mapped[str] = mapped_column(String, default="unconfirmed", index=True)
+
+    confirmed_by: Mapped[str] = mapped_column(String, default="")
+    entity_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    related_observation_ids_json: Mapped[str] = mapped_column(Text, default="[]")

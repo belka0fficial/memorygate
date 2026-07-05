@@ -6,7 +6,7 @@ from app.services.embeddings import embed_text
 
 @lru_cache(maxsize=1)
 def get_qdrant_client() -> QdrantClient:
-    return QdrantClient(url=QDRANT_URL)
+    return QdrantClient(url=QDRANT_URL, check_compatibility=False)
 
 def ensure_qdrant_collection() -> None:
     client = get_qdrant_client()
@@ -40,5 +40,25 @@ def search_memory_embeddings(query: str, limit: int = 20) -> list[str]:
         query_vector=query_vector,
         limit=limit,
         with_payload=True,
+        with_vectors=False,
     )
     return [str(hit.id) for hit in hits]
+
+def find_near_duplicate(text: str, limit: int = 3) -> list[dict]:
+    client = get_qdrant_client()
+    query_vector = embed_text(text)
+    hits = client.search(
+        collection_name=QDRANT_COLLECTION,
+        query_vector=query_vector,
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return [
+        {
+            "id": str(hit.id),
+            "score": float(hit.score),
+            "payload": hit.payload or {},
+        }
+        for hit in hits
+    ]

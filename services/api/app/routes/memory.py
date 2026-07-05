@@ -6,10 +6,16 @@ from app.models.memory import Memory
 from app.models.audit import MemoryAudit
 from app.schemas.memory import MemoryWriteRequest, MemorySearchRequest
 from app.services.classifier import classify_memory
-from app.services.qdrant_store import upsert_memory_embedding, search_memory_embeddings
+from app.services.qdrant_store import (
+    upsert_memory_embedding,
+    search_memory_embeddings,
+    find_near_duplicate,
+)
 from app.services.scoring import memory_rank_bonus, memory_strength
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+
+NEAR_DUPLICATE_THRESHOLD = 0.92
 
 def _row_to_dict(row):
     return {
@@ -32,6 +38,60 @@ def _merge_tags(old_tags: list[str], new_tags: list[str]) -> list[str]:
             merged.append(tag)
     return merged
 
+def _upgrade_existing_memory(db, row, payload, final_memory_type, final_confidence, final_identity_weight, final_summary):
+    old_tags = json.loads(row.tags_json)
+    merged_tags = _merge_tags(old_tags, payload.tags)
+
+    old_memory_type = row.memory_type
+    old_strength = memory_strength(row.memory_type, row.identity_weight, row.confidence)
+    new_strength = memory_strength(final_memory_type, final_identity_weight, final_confidence)
+
+    upgraded = False
+    if new_strength > old_strength:
+        row.memory_type = final_memory_type
+        row.confidence = final_confidence
+        row.identity_weight = final_identity_weight
+        row.summary = final_summary
+        upgraded = True
+
+    if merged_tags != old_tags:
+        row.tags_json = json.dumps(merged_tags)
+        upgraded = True
+
+    if upgraded:
+        db.add(MemoryAudit(
+            action="upgrade",
+            memory_id=row.id,
+            payload_json=json.dumps({
+                "text": payload.text,
+                "old_memory_type": old_memory_type,
+                "new_memory_type": row.memory_type,
+                "tags": merged_tags,
+            }),
+        ))
+        db.commit()
+
+        upsert_memory_embedding(
+            row.id,
+            row.text,
+            payload={
+                "memory_type": row.memory_type,
+                "source_type": row.source_type,
+                "confidence": row.confidence,
+                "identity_weight": row.identity_weight,
+                "tags": merged_tags,
+            },
+        )
+
+    return {
+        "status": "ok",
+        "id": row.id,
+        "memory_type": row.memory_type,
+        "summary": row.summary,
+        "duplicate_of": row.id,
+        "upgraded": upgraded,
+    }
+
 @router.post("/write")
 def write_memory(payload: MemoryWriteRequest):
     db = SessionLocal()
@@ -46,60 +106,34 @@ def write_memory(payload: MemoryWriteRequest):
         normalized_text = payload.text.strip().lower()
         existing = db.execute(select(Memory).order_by(Memory.created_at.desc()).limit(100)).scalars().all()
 
+        # exact duplicate
         for row in existing:
             if row.text.strip().lower() == normalized_text:
-                old_tags = json.loads(row.tags_json)
-                merged_tags = _merge_tags(old_tags, payload.tags)
+                return _upgrade_existing_memory(
+                    db, row, payload,
+                    final_memory_type,
+                    final_confidence,
+                    final_identity_weight,
+                    final_summary,
+                )
 
-                old_memory_type = row.memory_type
-                old_strength = memory_strength(row.memory_type, row.identity_weight, row.confidence)
-                new_strength = memory_strength(final_memory_type, final_identity_weight, final_confidence)
-
-                upgraded = False
-                if new_strength > old_strength:
-                    row.memory_type = final_memory_type
-                    row.confidence = final_confidence
-                    row.identity_weight = final_identity_weight
-                    row.summary = final_summary
-                    upgraded = True
-
-                if merged_tags != old_tags:
-                    row.tags_json = json.dumps(merged_tags)
-                    upgraded = True
-
-                if upgraded:
-                    db.add(MemoryAudit(
-                        action="upgrade",
-                        memory_id=row.id,
-                        payload_json=json.dumps({
-                            "text": payload.text,
-                            "old_memory_type": old_memory_type,
-                            "new_memory_type": row.memory_type,
-                            "tags": merged_tags,
-                        }),
-                    ))
-                    db.commit()
-
-                    upsert_memory_embedding(
-                        row.id,
-                        row.text,
-                        payload={
-                            "memory_type": row.memory_type,
-                            "source_type": row.source_type,
-                            "confidence": row.confidence,
-                            "identity_weight": row.identity_weight,
-                            "tags": merged_tags,
-                        },
+        # near duplicate by vector similarity
+        near_hits = find_near_duplicate(payload.text, limit=3)
+        if near_hits:
+            best = near_hits[0]
+            if best["score"] >= NEAR_DUPLICATE_THRESHOLD:
+                row = db.get(Memory, best["id"])
+                if row:
+                    result = _upgrade_existing_memory(
+                        db, row, payload,
+                        final_memory_type,
+                        final_confidence,
+                        final_identity_weight,
+                        final_summary,
                     )
-
-                return {
-                    "status": "ok",
-                    "id": row.id,
-                    "memory_type": row.memory_type,
-                    "summary": row.summary,
-                    "duplicate_of": row.id,
-                    "upgraded": upgraded,
-                }
+                    result["near_duplicate_of"] = row.id
+                    result["similarity"] = best["score"]
+                    return result
 
         memory = Memory(
             text=payload.text,

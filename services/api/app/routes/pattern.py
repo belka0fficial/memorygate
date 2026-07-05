@@ -1,0 +1,209 @@
+import json
+from datetime import datetime, timezone
+from fastapi import APIRouter, HTTPException
+from sqlalchemy import select
+from app.core.db import SessionLocal
+from app.models.pattern import Pattern
+from app.models.observation import Observation
+from app.schemas.pattern import (
+    PatternCreateRequest,
+    PatternSearchRequest,
+    PatternUpdateRequest,
+    PatternPromoteRequest,
+)
+
+router = APIRouter(prefix="/pattern", tags=["pattern"])
+
+def _pattern_to_dict(row: Pattern) -> dict:
+    return {
+        "id": row.id,
+        "pattern_name": row.pattern_name,
+        "description": row.description,
+        "observation_ids": json.loads(row.observation_ids_json),
+        "instance_count": row.instance_count,
+        "confirmation_count": row.confirmation_count,
+        "contradiction_count": row.contradiction_count,
+        "confidence": row.confidence,
+        "interpretation": row.interpretation,
+        "recommended_action": row.recommended_action,
+        "applies_to_entity_ids": json.loads(row.applies_to_entity_ids_json),
+        "context_conditions": json.loads(row.context_conditions_json),
+        "status": row.status,
+        "promoted_at": row.promoted_at.isoformat() if row.promoted_at else None,
+        "last_confirmed_at": row.last_confirmed_at.isoformat() if row.last_confirmed_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+@router.post("/create")
+def create_pattern(payload: PatternCreateRequest):
+    db = SessionLocal()
+    try:
+        row = Pattern(
+            pattern_name=payload.pattern_name,
+            description=payload.description,
+            observation_ids_json=json.dumps(payload.observation_ids),
+            instance_count=payload.instance_count,
+            confirmation_count=payload.confirmation_count,
+            contradiction_count=payload.contradiction_count,
+            confidence=payload.confidence,
+            interpretation=payload.interpretation,
+            recommended_action=payload.recommended_action,
+            applies_to_entity_ids_json=json.dumps(payload.applies_to_entity_ids),
+            context_conditions_json=json.dumps(payload.context_conditions),
+            status=payload.status,
+            promoted_at=datetime.now(timezone.utc) if payload.status == "active" else None,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {"status": "ok", "pattern": _pattern_to_dict(row)}
+    finally:
+        db.close()
+
+@router.post("/search")
+def search_patterns(payload: PatternSearchRequest):
+    db = SessionLocal()
+    try:
+        rows = db.execute(select(Pattern).order_by(Pattern.updated_at.desc())).scalars().all()
+        results = []
+
+        for row in rows:
+            item = _pattern_to_dict(row)
+
+            if payload.status and item["status"] != payload.status:
+                continue
+            if payload.entity_id and payload.entity_id not in item["applies_to_entity_ids"]:
+                continue
+
+            if payload.query:
+                hay = " ".join([
+                    item["pattern_name"],
+                    item["description"],
+                    item["interpretation"],
+                    item["recommended_action"],
+                    item["status"],
+                ]).lower()
+                if payload.query.lower() not in hay:
+                    continue
+
+            results.append(item)
+
+        return {"results": results[:50]}
+    finally:
+        db.close()
+
+@router.get("/{pattern_id}")
+def get_pattern(pattern_id: str):
+    db = SessionLocal()
+    try:
+        row = db.get(Pattern, pattern_id)
+        if not row:
+            raise HTTPException(404, "Pattern not found")
+        return _pattern_to_dict(row)
+    finally:
+        db.close()
+
+@router.post("/update/{pattern_id}")
+def update_pattern(pattern_id: str, payload: PatternUpdateRequest):
+    db = SessionLocal()
+    try:
+        row = db.get(Pattern, pattern_id)
+        if not row:
+            raise HTTPException(404, "Pattern not found")
+
+        if payload.description is not None:
+            row.description = payload.description
+        if payload.observation_ids is not None:
+            row.observation_ids_json = json.dumps(payload.observation_ids)
+        if payload.instance_count is not None:
+            row.instance_count = payload.instance_count
+        if payload.confirmation_count is not None:
+            row.confirmation_count = payload.confirmation_count
+        if payload.contradiction_count is not None:
+            row.contradiction_count = payload.contradiction_count
+        if payload.confidence is not None:
+            row.confidence = payload.confidence
+        if payload.interpretation is not None:
+            row.interpretation = payload.interpretation
+        if payload.recommended_action is not None:
+            row.recommended_action = payload.recommended_action
+        if payload.applies_to_entity_ids is not None:
+            row.applies_to_entity_ids_json = json.dumps(payload.applies_to_entity_ids)
+        if payload.context_conditions is not None:
+            row.context_conditions_json = json.dumps(payload.context_conditions)
+        if payload.status is not None:
+            row.status = payload.status
+            if payload.status == "active" and row.promoted_at is None:
+                row.promoted_at = datetime.now(timezone.utc)
+
+        db.commit()
+        db.refresh(row)
+        return {"status": "ok", "pattern": _pattern_to_dict(row)}
+    finally:
+        db.close()
+
+@router.post("/promote")
+def promote_pattern(payload: PatternPromoteRequest):
+    db = SessionLocal()
+    try:
+        obs_rows = db.execute(select(Observation).order_by(Observation.observed_at.desc())).scalars().all()
+        matched = []
+
+        for row in obs_rows:
+            entity_ids = json.loads(row.entity_ids_json)
+            if payload.entity_id and payload.entity_id not in entity_ids:
+                continue
+
+            if payload.query:
+                hay = " ".join([
+                    row.description,
+                    row.raw_context,
+                    row.hypothesis,
+                    row.signal_type,
+                    row.status,
+                ]).lower()
+                if payload.query.lower() not in hay:
+                    continue
+
+            matched.append(row)
+
+        if len(matched) < payload.min_observations:
+            return {
+                "status": "not_enough_evidence",
+                "matched_count": len(matched),
+                "required": payload.min_observations,
+            }
+
+        observation_ids = [row.id for row in matched]
+        applies_to_entity_ids = []
+        seen = set()
+        for row in matched:
+            for eid in json.loads(row.entity_ids_json):
+                if eid not in seen:
+                    seen.add(eid)
+                    applies_to_entity_ids.append(eid)
+
+        pattern = Pattern(
+            pattern_name=payload.pattern_name,
+            description=f"Promoted from {len(matched)} observations.",
+            observation_ids_json=json.dumps(observation_ids),
+            instance_count=len(matched),
+            confirmation_count=len(matched),
+            contradiction_count=0,
+            confidence=payload.confidence,
+            interpretation=payload.interpretation,
+            recommended_action=payload.recommended_action,
+            applies_to_entity_ids_json=json.dumps(applies_to_entity_ids),
+            context_conditions_json=json.dumps({}),
+            status="candidate" if payload.confidence < 0.85 else "active",
+            promoted_at=datetime.now(timezone.utc) if payload.confidence >= 0.85 else None,
+            last_confirmed_at=datetime.now(timezone.utc),
+        )
+        db.add(pattern)
+        db.commit()
+        db.refresh(pattern)
+
+        return {"status": "ok", "pattern": _pattern_to_dict(pattern)}
+    finally:
+        db.close()
