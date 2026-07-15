@@ -27,6 +27,7 @@ def _row_to_dict(row):
         "confidence": row.confidence,
         "identity_weight": row.identity_weight,
         "tags": json.loads(row.tags_json),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 def _merge_tags(old_tags: list[str], new_tags: list[str]) -> list[str]:
