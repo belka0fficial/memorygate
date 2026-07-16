@@ -10,10 +10,12 @@ from app.routes.observation import router as observation_router
 from app.routes.pattern import router as pattern_router
 from app.routes.agent_config import router as agent_config_router
 from app.routes.briefing import router as briefing_router
+from app.routes.transcript import router as transcript_router
 from app.models import memory, audit, agent_config
 from app.models import entity
 from app.models import observation
 from app.models import pattern
+from app.models import session_transcript
 from app.services.qdrant_store import ensure_qdrant_collection, ensure_observation_collection
 from app.services.embeddings import get_embedding_model, embed_text
 
@@ -59,3 +61,5 @@ app.include_router(pattern_router, dependencies=_auth)
 app.include_router(agent_config_router, dependencies=_auth)
 
 app.include_router(briefing_router, dependencies=_auth)
+
+app.include_router(transcript_router, dependencies=_auth)
