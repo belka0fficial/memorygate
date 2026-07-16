@@ -351,7 +351,7 @@ requires `X-MemoryGate-Key` — see "Authentication" above.
 - `DELETE /memory/{id}` — removes the row and its Qdrant point; logs a `delete` audit row.
 
 ### `/entity`
-- `POST /entity/create` — now takes `agent_notes`/`agent_summary` (renamed from `conker_notes`/`conker_summary` — any agent can keep its own notes on an entity now, not just Conker). Dedup-checks first: exact name match (case/whitespace-insensitive, scoped to `agent_id`+`entity_type`), then embedding similarity (`>= 0.9`, its own Qdrant collection) — a hit merges the incoming tags/attributes/description into the existing row and returns it with `deduplicated: true` instead of inserting a new one.
+- `POST /entity/create` — now takes `agent_notes`/`agent_summary` (renamed from `conker_notes`/`conker_summary` — any agent can keep its own notes on an entity now, not just Conker). `entity_type` must be one of `CURRENT_ENTITY_TYPES` (human/project/organization/place/concept/habit/object) or the request gets a `422`. Dedup-checks first: exact name match (case/whitespace-insensitive, scoped to `agent_id`+`entity_type`), then embedding similarity (`>= 0.9`, its own Qdrant collection) — a hit merges the incoming tags/attributes/description into the existing row and returns it with `deduplicated: true` instead of inserting a new one.
 - `POST /entity/merge` — `{keep_entity_id, merge_entity_id}`. Manual merge for near-duplicates the create-time dedup didn't catch (below the similarity threshold, or two entities with genuinely different names that a human recognizes as the same thing) — repoints `entity_edges`/`entity_events`/`entity_history` and the `entity_ids_json`/`applies_to_entity_ids_json` membership on `observations`/`patterns`, merges tags/attributes/description into `keep_entity_id`, deletes `merge_entity_id`. Backs the entity graph's merge action (select two nodes → pick which to keep).
 - `GET /entity` — last 100 entities for the caller's agent, newest-updated first (mirrors `GET /memory`).
 - `GET /entity/{id}`
@@ -571,6 +571,36 @@ because they're generically useful for future UI changes:
   that isn't the memories search box `search:` already special-cases),
   `wait:<ms>`.
 
+## Follow-up: SoulGate-side work
+
+Three items from the last review round can't be fixed in this repo because
+they live on the extraction side, in SoulGate's prompt and worker, not
+here. Tracked together since they're the same repo-boundary issue:
+
+1. **Call `POST /transcripts/{id}/mark-processed`.** The endpoint exists
+   (see `/transcripts` above) but nothing calls it yet — until SoulGate's
+   worker hits it after finishing extraction on a transcript, the flag can
+   never actually become `true` in practice, and the "reprocess a
+   transcript SoulGate already handled → duplicate extraction" risk this
+   endpoint exists to prevent is still live. A nicer API sitting unused
+   next to the problem isn't a fix. **This is the top-priority item of
+   the three** — the other two are extraction-quality issues, this one is
+   a correctness gap with a concrete failure mode (duplicate memories from
+   double-processing the same session).
+2. **Add an explicit prompt rule: preferences, habits-as-attributes, and
+   traits are never entities.** MemoryGate now rejects an unrecognized
+   `entity_type` at the API level (see "Notable gaps" below), but it
+   can't stop SoulGate from choosing a *valid* type for the wrong reason —
+   e.g. filing "prefers dark mode" as a `concept` entity instead of a
+   `fact` memory. That's a judgment call made at extraction time.
+3. **Add a `watch` definition + one example to the prompt.** `watch` means
+   a harmful behavioral pattern needing protective attention, not "the
+   text contains a testing/QA phrase that happens to overlap with the
+   classifier's keyword list." One labeled example in the prompt (a real
+   harmful-pattern sentence vs. a sentence that merely mentions testing)
+   would give the classifier's heuristics something to actually agree
+   with instead of fighting.
+
 ## Notable gaps / rough edges
 
 - `qdrant_stub.py` is dead code — an unused no-op stand-in for
@@ -627,22 +657,20 @@ because they're generically useful for future UI changes:
   requests of a single-agent view and only knows about agents the browser
   has locally recorded (built-in Conker/Emolga/Conker (dev), plus anything
   added via "+ Add" in *that* browser's `localStorage`).
-- `entity_type` is unvalidated free text (unlike `memory_type`, which is
-  now a hard-enforced 4-value enum - see "Memory classification"). Nothing
-  in MemoryGate stops a caller from creating an entity for something that
-  should have been a memory instead - e.g. a bare preference like "dark
-  mode" filed as a `concept` entity rather than a `fact` memory, which
-  then shows up as a graph node with no edges and no events, forever.
-  `concept`/`habit` are legitimate entity types for things that genuinely
-  have relational structure (a recurring habit with logged events, a topic
-  linked to multiple people) - the failure mode is a caller (SoulGate)
-  reaching for one when a plain attribute would do. MemoryGate can dedup
-  and merge bad entities (`POST /entity/merge`, or the graph's merge
-  action) once they exist, and a human can always delete one outright, but
-  it can't tell a well-formed "this concept has relationships worth
-  tracking" call from a mis-filed preference at write time - that
-  judgment call happens entirely on the extraction side, outside this
-  codebase. Same story for `classifier.py`'s keyword-heuristic `watch`
-  detection (see above): it fires on literal phrases like "keep doing" /
+- `entity_type` is now a hard-enforced 7-value enum
+  (`CURRENT_ENTITY_TYPES` in `routes/entity.py`: human / project /
+  organization / place / concept / habit / object), mirroring what
+  `memory_type` already does — an unrecognized value on `POST
+  /entity/create` gets a `422`, not a silent insert. This stops a caller
+  from filing something into the wrong table at the schema level, but it
+  can't stop the *right* type from being chosen for the *wrong* reason —
+  nothing here can tell a well-formed "this concept has relationships
+  worth tracking" call from a bare preference that happened to pick
+  `concept` instead of writing a `fact` memory (both are valid
+  `entity_type` values). That judgment call is made entirely by the
+  caller (SoulGate) at extraction time, outside this codebase — see
+  "Follow-up: SoulGate-side work" below. `classifier.py`'s
+  keyword-heuristic `watch` detection has the same class of problem in
+  the other direction: it fires on literal phrases like "keep doing" /
   "can't stop", so text that happens to contain testing/QA language can
   trip it as readily as a real harmful pattern.

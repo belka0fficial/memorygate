@@ -18,6 +18,17 @@ from app.services.qdrant_store import upsert_entity_embedding, delete_entity_emb
 
 router = APIRouter(prefix="/entity", tags=["entity"])
 
+# Entities are nouns in the world - people/projects/places/orgs, plus
+# concept/habit for things with genuine relational structure (recurring
+# habits with logged events, topics linked to multiple people). Preferences,
+# traits, and other plain attributes belong in `memories`, not here - see
+# the "entity_type validation" note in the README's Notable gaps. Mirrors
+# CURRENT_MEMORY_TYPES in services/classifier.py and the dashboard's
+# ENTITY_TYPE_COLORS (dashboard/src/components/EntityTypeBadge.jsx) - keep
+# all three in sync by hand, there's no single source of truth across
+# Python/JS.
+CURRENT_ENTITY_TYPES = {"human", "project", "organization", "place", "concept", "habit", "object"}
+
 def _entity_to_dict(row: Entity) -> dict:
     return {
         "id": row.id,
@@ -53,6 +64,13 @@ def list_entities(agent_id: str = Depends(get_agent_id)):
 
 @router.post("/create")
 def create_entity(payload: EntityCreateRequest, header_agent_id: str = Depends(get_agent_id)):
+    if payload.entity_type not in CURRENT_ENTITY_TYPES:
+        raise HTTPException(
+            422,
+            f"Unrecognized entity_type '{payload.entity_type}'. Must be one of {sorted(CURRENT_ENTITY_TYPES)}. "
+            f"A plain preference or trait with no relational structure belongs in /memory, not here.",
+        )
+
     agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
