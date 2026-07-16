@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import * as d3 from 'd3';
-import { Plus, Minus, RotateCcw, Search } from 'lucide-react';
+import { Plus, Minus, RotateCcw, Search, Merge, X } from 'lucide-react';
 import { entityTypeColor, ENTITY_TYPE_COLORS } from './EntityTypeBadge';
 
 const IMPORTANCE_RADIUS = { critical: 20, high: 15, normal: 10, low: 7 };
@@ -9,12 +9,41 @@ function radiusFor(level) {
   return IMPORTANCE_RADIUS[level] ?? IMPORTANCE_RADIUS.normal;
 }
 
-export default function EntityGraph({ entities, edges, selectedId, onSelect }) {
+export default function EntityGraph({ entities, edges, selectedId, onSelect, onMerge }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const zoomRef = useRef(null);
   const [visibleTypes, setVisibleTypes] = useState(() => new Set(Object.keys(ENTITY_TYPE_COLORS)));
   const [query, setQuery] = useState('');
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSelection, setMergeSelection] = useState([]);
+  const [keepId, setKeepId] = useState(null);
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState('');
+
+  const toggleMergeMode = () => {
+    setMergeMode((m) => !m);
+    setMergeSelection([]);
+    setKeepId(null);
+    setMergeError('');
+  };
+
+  const handleNodeClick = (d) => {
+    if (!mergeMode) {
+      onSelect(d);
+      return;
+    }
+    setMergeSelection((prev) => {
+      if (prev.some((p) => p.id === d.id)) return prev.filter((p) => p.id !== d.id);
+      if (prev.length >= 2) return prev;
+      return [...prev, d];
+    });
+  };
+
+  useEffect(() => {
+    if (mergeSelection.length === 2 && !keepId) setKeepId(mergeSelection[0].id);
+    if (mergeSelection.length < 2) setKeepId(null);
+  }, [mergeSelection]);
 
   const filteredEntities = useMemo(
     () => entities.filter((e) => visibleTypes.has(e.entity_type)),
@@ -65,20 +94,22 @@ export default function EntityGraph({ entities, edges, selectedId, onSelect }) {
 
     link.append('title').text((d) => d.relationship_type);
 
+    const mergeSelectedIds = new Set(mergeSelection.map((m) => m.id));
+
     const node = g.append('g')
       .selectAll('g')
       .data(nodes)
       .join('g')
       .style('cursor', 'pointer')
       .call(dragBehavior(simulation))
-      .on('click', (_event, d) => onSelect(d));
+      .on('click', (_event, d) => handleNodeClick(d));
 
     node.append('circle')
       .attr('r', (d) => radiusFor(d.importance_level))
       .attr('fill', (d) => entityTypeColor(d.entity_type))
       .attr('fill-opacity', 0.9)
-      .attr('stroke', (d) => (d.id === selectedId ? '#ededed' : 'transparent'))
-      .attr('stroke-width', 2);
+      .attr('stroke', (d) => (mergeSelectedIds.has(d.id) ? '#F59E0B' : d.id === selectedId ? '#ededed' : 'transparent'))
+      .attr('stroke-width', (d) => (mergeSelectedIds.has(d.id) ? 3 : 2));
 
     node.append('text')
       .text((d) => d.name)
@@ -97,7 +128,7 @@ export default function EntityGraph({ entities, edges, selectedId, onSelect }) {
     });
 
     return () => simulation.stop();
-  }, [filteredEntities, edges, selectedId, onSelect]);
+  }, [filteredEntities, edges, selectedId, onSelect, mergeMode, mergeSelection]);
 
   useEffect(() => {
     if (!zoomRef.current) return;
@@ -144,7 +175,59 @@ export default function EntityGraph({ entities, edges, selectedId, onSelect }) {
           <button onClick={() => zoomBy(1.3)} className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/[0.06] hover:text-text"><Plus size={14} /></button>
           <button onClick={() => zoomBy(0.75)} className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/[0.06] hover:text-text"><Minus size={14} /></button>
           <button onClick={resetZoom} className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/[0.06] hover:text-text"><RotateCcw size={13} /></button>
+          {onMerge && (
+            <button
+              onClick={toggleMergeMode}
+              title="Select two nodes to merge"
+              className={`rounded-md p-1.5 transition-colors ${mergeMode ? 'bg-amber-500/20 text-amber-400' : 'text-muted hover:bg-white/[0.06] hover:text-text'}`}
+            >
+              <Merge size={14} />
+            </button>
+          )}
         </div>
+
+        {mergeMode && (
+          <div className="w-56 rounded-lg border border-amber-500/30 bg-surface p-3 text-xs">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-medium text-text">Merge nodes</span>
+              <button onClick={toggleMergeMode} className="text-muted hover:text-text"><X size={13} /></button>
+            </div>
+            {mergeSelection.length === 0 && <p className="text-muted">Click two nodes to select them.</p>}
+            {mergeSelection.length === 1 && <p className="text-muted">Selected <span className="text-text">{mergeSelection[0].name}</span> — click one more.</p>}
+            {mergeSelection.length === 2 && (
+              <div className="flex flex-col gap-2">
+                <span className="text-muted">Keep which one?</span>
+                {mergeSelection.map((m) => (
+                  <label key={m.id} className="flex items-center gap-1.5 text-text">
+                    <input type="radio" name="keep" checked={keepId === m.id} onChange={() => setKeepId(m.id)} className="accent-accent" />
+                    {m.name}
+                  </label>
+                ))}
+                <button
+                  disabled={merging}
+                  onClick={async () => {
+                    const mergeAway = mergeSelection.find((m) => m.id !== keepId);
+                    setMerging(true);
+                    setMergeError('');
+                    try {
+                      await onMerge(keepId, mergeAway.id);
+                      setMergeSelection([]);
+                      setKeepId(null);
+                    } catch (err) {
+                      setMergeError(err.message || 'Merge failed');
+                    } finally {
+                      setMerging(false);
+                    }
+                  }}
+                  className="mt-1 rounded-md bg-amber-500/20 px-2.5 py-1.5 font-medium text-amber-400 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
+                >
+                  {merging ? 'Merging…' : `Merge into ${mergeSelection.find((m) => m.id === keepId)?.name}`}
+                </button>
+                {mergeError && <p className="text-red-400">{mergeError}</p>}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="relative">
           <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />

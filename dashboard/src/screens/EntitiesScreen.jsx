@@ -97,6 +97,20 @@ export default function EntitiesScreen() {
     setSelected(null);
   };
 
+  const handleMerge = async (keepId, mergeId) => {
+    const keepEntity = entities.find((e) => e.id === keepId);
+    const res = await api.post('/entity/merge', { keep_entity_id: keepId, merge_entity_id: mergeId }, undefined, keepEntity.agent_id);
+    setEntities((prev) => prev.filter((e) => e.id !== mergeId).map((e) => (e.id === keepId ? res.entity : e)));
+    setEdges((prev) => prev
+      .filter((e) => !(e.from_entity_id === mergeId && e.to_entity_id === keepId) && !(e.to_entity_id === mergeId && e.from_entity_id === keepId))
+      .map((e) => ({
+        ...e,
+        from_entity_id: e.from_entity_id === mergeId ? keepId : e.from_entity_id,
+        to_entity_id: e.to_entity_id === mergeId ? keepId : e.to_entity_id,
+      })));
+    if (selected?.id === mergeId) setSelected(res.entity);
+  };
+
   return (
     <div className="p-5 md:p-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -110,7 +124,7 @@ export default function EntitiesScreen() {
       {entities === null ? (
         <p className="text-sm text-muted">Loading…</p>
       ) : view === 'graph' ? (
-        <EntityGraph entities={entities} edges={edges} selectedId={selected?.id} onSelect={openEntity} />
+        <EntityGraph entities={entities} edges={edges} selectedId={selected?.id} onSelect={openEntity} onMerge={handleMerge} />
       ) : (
         <EntityTable
           entities={pageEntities}

@@ -11,8 +11,9 @@ from app.schemas.entity import (
     EntityLinkRequest,
     EntityEventCreateRequest,
     EntityUpdateByIdRequest,
+    EntityMergeRequest,
 )
-from app.services.entity_dedup import find_duplicate
+from app.services.entity_dedup import find_duplicate, merge_entities
 from app.services.qdrant_store import upsert_entity_embedding, delete_entity_embedding
 
 router = APIRouter(prefix="/entity", tags=["entity"])
@@ -213,6 +214,33 @@ def update_entity(entity_id: str, payload: EntityUpdateRequest, agent_id: str = 
         db.commit()
 
         return {"status": "ok", "entity": after}
+    finally:
+        db.close()
+
+@router.post("/merge")
+def merge_entity(payload: EntityMergeRequest, agent_id: str = Depends(get_agent_id)):
+    if payload.keep_entity_id == payload.merge_entity_id:
+        raise HTTPException(400, "keep_entity_id and merge_entity_id must be different")
+
+    db = SessionLocal()
+    try:
+        try:
+            keep = merge_entities(db, agent_id, payload.keep_entity_id, payload.merge_entity_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+
+        db.add(EntityHistory(
+            entity_id=keep.id,
+            changed_field="entity_merged",
+            old_value_json=json.dumps({"merged_entity_id": payload.merge_entity_id}),
+            new_value_json=json.dumps(_entity_to_dict(keep)),
+            change_reason="manual merge from the entity graph",
+            triggered_by="user",
+        ))
+        db.commit()
+        db.refresh(keep)
+
+        return {"status": "ok", "entity": _entity_to_dict(keep)}
     finally:
         db.close()
 

@@ -44,6 +44,10 @@ class EntityEventCreateRequest(BaseModel):
     emotional_weight: int = 1
     occurred_at: str = ""
 
+class EntityMergeRequest(BaseModel):
+    keep_entity_id: str
+    merge_entity_id: str
+
 class EntityUpdateByIdRequest(BaseModel):
     entity_id: str
     name: str | None = None

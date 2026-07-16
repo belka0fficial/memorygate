@@ -6,6 +6,9 @@ const SELECTED_KEY = 'memorygate_selected_agent';
 export const BUILTIN_AGENTS = [
   { id: 'conker', label: 'Conker', color: '#3B82F6' },
   { id: 'emolga', label: 'Emolga', color: '#10B981' },
+  // Isolated by agent_id like any other agent - use this for manual testing
+  // and experiments so they never mix into Conker's real model of you.
+  { id: 'conker-dev', label: 'Conker (dev)', color: '#6B7280' },
 ];
 
 const EXTRA_COLORS = ['#F59E0B', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];

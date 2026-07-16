@@ -1,9 +1,10 @@
 """Dedup check for entity creation - exact name match first, then embedding
 similarity, scoped to (agent_id, entity_type) so e.g. a person and a project
 that happen to share a name never collide."""
-from sqlalchemy import select, func
+import json
+from sqlalchemy import select, func, text
 from app.models.entity import Entity
-from app.services.qdrant_store import find_similar_entities
+from app.services.qdrant_store import find_similar_entities, delete_entity_embedding
 
 DEDUP_SIMILARITY_THRESHOLD = 0.9
 
@@ -29,3 +30,65 @@ def find_duplicate(db, agent_id: str, entity_type: str, name: str) -> Entity | N
         return db.get(Entity, hits[0]["id"])
 
     return None
+
+
+def merge_entities(db, agent_id: str, keep_id: str, merge_id: str) -> Entity:
+    """Manual merge for the graph's 'select two nodes -> merge' action -
+    same repointing logic as the startup dedup migration
+    (core/migrations.py:_merge_duplicate_entities), just against a live ORM
+    session instead of a bare connection, and for a single caller-chosen pair
+    instead of every duplicate group at once."""
+    if keep_id == merge_id:
+        raise ValueError("cannot merge an entity into itself")
+
+    keep = db.get(Entity, keep_id)
+    merge = db.get(Entity, merge_id)
+    if not keep or keep.agent_id != agent_id or not merge or merge.agent_id != agent_id:
+        raise ValueError("entity not found")
+
+    merged_tags = list(json.loads(keep.tags_json))
+    for tag in json.loads(merge.tags_json):
+        if tag not in merged_tags:
+            merged_tags.append(tag)
+    keep.tags_json = json.dumps(merged_tags)
+
+    merged_attrs = json.loads(keep.attributes_json)
+    for key, value in json.loads(merge.attributes_json).items():
+        merged_attrs.setdefault(key, value)
+    keep.attributes_json = json.dumps(merged_attrs)
+
+    keep.description = keep.description or merge.description
+    keep.agent_notes = keep.agent_notes or merge.agent_notes
+    keep.agent_summary = keep.agent_summary or merge.agent_summary
+
+    db.execute(text("UPDATE entity_edges SET from_entity_id = :k WHERE from_entity_id = :m"), {"k": keep_id, "m": merge_id})
+    db.execute(text("UPDATE entity_edges SET to_entity_id = :k WHERE to_entity_id = :m"), {"k": keep_id, "m": merge_id})
+    db.execute(text("UPDATE entity_events SET entity_id = :k WHERE entity_id = :m"), {"k": keep_id, "m": merge_id})
+    db.execute(text("UPDATE entity_history SET entity_id = :k WHERE entity_id = :m"), {"k": keep_id, "m": merge_id})
+
+    for table, column in (("observations", "entity_ids_json"), ("patterns", "applies_to_entity_ids_json")):
+        rows = db.execute(
+            text(f"SELECT id, {column} FROM {table} WHERE {column} LIKE :pat"), {"pat": f"%{merge_id}%"}
+        ).fetchall()
+        for row in rows:
+            ids = json.loads(getattr(row, column))
+            if merge_id not in ids:
+                continue
+            new_ids, seen = [], set()
+            for i in ids:
+                mapped = keep_id if i == merge_id else i
+                if mapped not in seen:
+                    seen.add(mapped)
+                    new_ids.append(mapped)
+            db.execute(text(f"UPDATE {table} SET {column} = :v WHERE id = :id"), {"v": json.dumps(new_ids), "id": row.id})
+
+    db.delete(merge)
+    db.commit()
+    db.refresh(keep)
+
+    try:
+        delete_entity_embedding(merge_id)
+    except Exception:
+        pass
+
+    return keep

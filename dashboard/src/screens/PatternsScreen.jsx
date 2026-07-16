@@ -8,10 +8,16 @@ import Button from '../components/Button';
 import AgentDot from '../components/AgentDot';
 
 const PROMOTE_AT_CONFIRMATIONS = 5;
+// Mirrors MAX_PATTERN_CONFIDENCE in services/pattern_promotion.py - a pattern
+// that could show 100% could never be doubted, which means it could never
+// be deprecated. This derived ratio bypasses the backend's stored (already
+// capped) confidence field, so it needs its own cap.
+const MAX_CONFIDENCE = 0.95;
 
 function derivedConfidence(p) {
   const total = p.confirmation_count + p.contradiction_count;
-  return total > 0 ? p.confirmation_count / total : p.confidence;
+  const raw = total > 0 ? p.confirmation_count / total : p.confidence;
+  return Math.min(raw, MAX_CONFIDENCE);
 }
 
 function PatternCard({ pattern, isAll, busy, onConfirm, onContradict, onDismiss, candidate }) {

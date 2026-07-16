@@ -215,13 +215,22 @@ function ObservationCard({
       </button>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-1.5">
+        <div
+          className="flex items-center gap-1.5"
+          title={`Exposure: surfaced to the agent ${o.exposure_count} of ${o.max_exposures} times before it's archived unconfirmed`}
+        >
+          <span className="text-[11px] uppercase tracking-wide text-muted/70">Exposure</span>
           <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/5">
             <div className="h-full rounded-full" style={{ width: `${Math.min(100, (o.exposure_count / Math.max(1, o.max_exposures)) * 100)}%`, background: exposureColor(o.exposure_count, o.max_exposures) }} />
           </div>
           <span className="text-[11px] text-muted">{o.exposure_count}/{o.max_exposures}</span>
         </div>
-        <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">{Math.round(o.hypothesis_confidence * 100)}%</span>
+        <span
+          className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
+          title="Hypothesis confidence: how sure SoulGate was when it wrote this hypothesis"
+        >
+          {Math.round(o.hypothesis_confidence * 100)}% confidence
+        </span>
         {o.entity_ids.length > 0 && (
           <div className="flex -space-x-1.5">
             {o.entity_ids.slice(0, 4).map((id) => (
