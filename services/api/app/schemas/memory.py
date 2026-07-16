@@ -1,13 +1,13 @@
 from pydantic import BaseModel
-from typing import Any
 
 class MemoryWriteRequest(BaseModel):
     agent_id: str | None = None
     text: str
     source_type: str = "user"
-    memory_type: str | None = None
+    memory_type: str | None = None  # fact / phase / context / watch (legacy type names are transparently mapped)
     confidence: str | None = None
-    identity_weight: str | None = None
+    do_not_generalize: bool | None = None
+    review_by: str | None = None  # ISO datetime; auto-defaulted to +14d for phase memories if omitted
     tags: list[str] = []
 
 class MemorySearchRequest(BaseModel):
@@ -18,7 +18,8 @@ class MemoryPatchRequest(BaseModel):
     text: str | None = None
     memory_type: str | None = None
     confidence: str | None = None
-    identity_weight: str | None = None
+    do_not_generalize: bool | None = None
+    review_by: str | None = None
     tags: list[str] | None = None
 
 class MemoryResponse(BaseModel):
@@ -28,5 +29,6 @@ class MemoryResponse(BaseModel):
     memory_type: str
     source_type: str
     confidence: str
-    identity_weight: str
+    do_not_generalize: bool
+    review_by: str | None
     tags: list[str]

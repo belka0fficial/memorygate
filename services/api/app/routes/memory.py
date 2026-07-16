@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from app.core.db import SessionLocal
@@ -6,7 +7,7 @@ from app.core.agent import get_agent_id, resolve_agent_id
 from app.models.memory import Memory
 from app.models.audit import MemoryAudit
 from app.schemas.memory import MemoryWriteRequest, MemorySearchRequest, MemoryPatchRequest
-from app.services.classifier import classify_memory
+from app.services.classifier import classify_memory, normalize_memory_type
 from app.services.signal_filter import score_value, novelty_bucket, NOVELTY_DUPLICATE, NOVELTY_LOW
 from app.services.agent_config_service import get_or_create_config
 from app.services.qdrant_store import (
@@ -19,6 +20,20 @@ from app.services.scoring import memory_rank_bonus, memory_strength
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
+PHASE_REVIEW_WINDOW = timedelta(days=14)
+
+def _parse_review_by(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+def _default_review_by(memory_type: str, review_by: datetime | None) -> datetime | None:
+    if review_by is not None:
+        return review_by
+    if memory_type == "phase":
+        return datetime.now(timezone.utc) + PHASE_REVIEW_WINDOW
+    return None
+
 def _row_to_dict(row, score=None):
     result = {
         "id": row.id,
@@ -28,7 +43,8 @@ def _row_to_dict(row, score=None):
         "memory_type": row.memory_type,
         "source_type": row.source_type,
         "confidence": row.confidence,
-        "identity_weight": row.identity_weight,
+        "do_not_generalize": row.do_not_generalize,
+        "review_by": row.review_by.isoformat() if row.review_by else None,
         "tags": json.loads(row.tags_json),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -46,19 +62,18 @@ def _merge_tags(old_tags: list[str], new_tags: list[str]) -> list[str]:
             merged.append(tag)
     return merged
 
-def _upgrade_existing_memory(db, row, payload, final_memory_type, final_confidence, final_identity_weight, final_summary):
+def _upgrade_existing_memory(db, row, payload, final_memory_type, final_confidence, final_summary):
     old_tags = json.loads(row.tags_json)
     merged_tags = _merge_tags(old_tags, payload.tags)
 
     old_memory_type = row.memory_type
-    old_strength = memory_strength(row.memory_type, row.identity_weight, row.confidence)
-    new_strength = memory_strength(final_memory_type, final_identity_weight, final_confidence)
+    old_strength = memory_strength(row.memory_type, row.confidence)
+    new_strength = memory_strength(final_memory_type, final_confidence)
 
     upgraded = False
     if new_strength > old_strength:
         row.memory_type = final_memory_type
         row.confidence = final_confidence
-        row.identity_weight = final_identity_weight
         row.summary = final_summary
         upgraded = True
 
@@ -88,7 +103,6 @@ def _upgrade_existing_memory(db, row, payload, final_memory_type, final_confiden
                 "memory_type": row.memory_type,
                 "source_type": row.source_type,
                 "confidence": row.confidence,
-                "identity_weight": row.identity_weight,
                 "tags": merged_tags,
             },
         )
@@ -122,10 +136,11 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
 
         classified = classify_memory(payload.text, payload.source_type)
 
-        final_memory_type = payload.memory_type or classified["memory_type"]
+        final_memory_type = normalize_memory_type(payload.memory_type) or classified["memory_type"]
         final_confidence = payload.confidence or classified["confidence"]
-        final_identity_weight = payload.identity_weight or classified["identity_weight"]
         final_summary = classified["summary"]
+        final_do_not_generalize = payload.do_not_generalize if payload.do_not_generalize is not None else False
+        final_review_by = _default_review_by(final_memory_type, _parse_review_by(payload.review_by))
 
         normalized_text = payload.text.strip().lower()
         existing = db.execute(
@@ -142,7 +157,6 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
                     db, row, payload,
                     final_memory_type,
                     final_confidence,
-                    final_identity_weight,
                     final_summary,
                 )
 
@@ -160,7 +174,6 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
                     db, row, payload,
                     final_memory_type,
                     final_confidence,
-                    final_identity_weight,
                     final_summary,
                 )
                 result["near_duplicate_of"] = row.id
@@ -178,7 +191,8 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
             memory_type=final_memory_type,
             source_type=payload.source_type,
             confidence=final_confidence,
-            identity_weight=final_identity_weight,
+            do_not_generalize=final_do_not_generalize,
+            review_by=final_review_by,
             tags_json=json.dumps(payload.tags),
         )
         db.add(memory)
@@ -193,7 +207,6 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
                 "memory_type": memory.memory_type,
                 "source_type": memory.source_type,
                 "confidence": memory.confidence,
-                "identity_weight": memory.identity_weight,
                 "tags": payload.tags,
             },
         )
@@ -244,7 +257,7 @@ def search_memory(payload: MemorySearchRequest, header_agent_id: str = Depends(g
             rescored = []
             for row in fetched:
                 base = max(0.0, 1.0 - (id_to_rank.get(row.id, 999) * 0.03))
-                bonus = memory_rank_bonus(row.memory_type, row.identity_weight, row.confidence)
+                bonus = memory_rank_bonus(row.memory_type, row.confidence)
 
                 text_lower = row.text.lower()
                 lexical = 0.0
@@ -305,11 +318,13 @@ def patch_memory(memory_id: str, payload: MemoryPatchRequest, agent_id: str = De
         if payload.text is not None:
             row.text = payload.text
         if payload.memory_type is not None:
-            row.memory_type = payload.memory_type
+            row.memory_type = normalize_memory_type(payload.memory_type)
         if payload.confidence is not None:
             row.confidence = payload.confidence
-        if payload.identity_weight is not None:
-            row.identity_weight = payload.identity_weight
+        if payload.do_not_generalize is not None:
+            row.do_not_generalize = payload.do_not_generalize
+        if payload.review_by is not None:
+            row.review_by = _parse_review_by(payload.review_by)
         if payload.tags is not None:
             row.tags_json = json.dumps(payload.tags)
 
@@ -324,7 +339,6 @@ def patch_memory(memory_id: str, payload: MemoryPatchRequest, agent_id: str = De
                 "memory_type": row.memory_type,
                 "source_type": row.source_type,
                 "confidence": row.confidence,
-                "identity_weight": row.identity_weight,
                 "tags": json.loads(row.tags_json),
             },
         )

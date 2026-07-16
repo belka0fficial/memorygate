@@ -1,33 +1,45 @@
 """Scored multi-signal memory classifier.
 
-Each candidate `memory_type` is defined by one or more independent keyword
-"signal" lists. A signal fires (contributes weight 1.0) if any phrase in its
-list appears in the text — some signals are gated by an exclusion list
-instead (e.g. identity traits are disqualified by temporary-language
+Four memory types: `fact` (durable facts/preferences/identity/humor-style),
+`phase` (temporary emotional/circumstantial states - carries a review_by),
+`context` (default/fallback, everyday task info), `watch` (behavioral
+patterns worth monitoring). This used to be seven finer-grained types
+(stable_preference/identity_trait/humor_style -> fact, temporary_phase/
+support_context -> phase, task_context -> context, harmful_pattern ->
+watch) - the underlying keyword-signal detectors are unchanged from that
+version, just aggregated into fewer output buckets.
+
+Each candidate type is defined by one or more independent keyword-list
+"signals". A signal fires (contributes weight 1.0) if any phrase in its
+list appears in the text - some are gated by an exclusion list instead
+(e.g. facts-via-identity-phrase are disqualified by temporary-language
 phrasing). The type with the most fired signals wins; ties are broken by
 priority order. Confidence scales with how many signals fired: 1 -> low,
 2 -> medium, 3+ -> high.
 """
 
 # priority order used to break ties between types with equal signal counts
-TYPE_PRIORITY = [
-    "harmful_pattern",
-    "stable_preference",
-    "identity_trait",
-    "humor_style",
-    "temporary_phase",
-    "support_context",
-]
+TYPE_PRIORITY = ["watch", "fact", "phase"]
 
-BASE_TYPE_INFO = {
-    "harmful_pattern": {"identity_weight": "medium"},
-    "stable_preference": {"identity_weight": "medium"},
-    "identity_trait": {"identity_weight": "medium"},
-    "humor_style": {"identity_weight": "medium"},
-    "temporary_phase": {"identity_weight": "low"},
-    "support_context": {"identity_weight": "low"},
-    "task_context": {"identity_weight": "low"},
+# maps the old 7-type taxonomy onto the new 4 types, so callers (ToolGate)
+# that haven't been updated yet and still pass an explicit legacy
+# memory_type override keep working instead of getting an unrecognized value.
+LEGACY_TYPE_MAP = {
+    "stable_preference": "fact",
+    "identity_trait": "fact",
+    "humor_style": "fact",
+    "temporary_phase": "phase",
+    "support_context": "phase",
+    "task_context": "context",
+    "harmful_pattern": "watch",
 }
+
+
+def normalize_memory_type(memory_type: str | None) -> str | None:
+    if memory_type is None:
+        return None
+    return LEGACY_TYPE_MAP.get(memory_type, memory_type)
+
 
 PREFERENCE_WORDS = ["always", "never", "prefer", "hate when"]
 DOMAIN_WORDS = ["build", "code", "design", "food", "sleep", "train", "work"]
@@ -54,7 +66,7 @@ def _count_hits(lower: str, phrases: list[str]) -> int:
     return sum(1 for p in phrases if p in lower)
 
 
-def _score_stable_preference(lower: str) -> int:
+def _score_preference(lower: str) -> int:
     signals = 0
     if _count_hits(lower, PREFERENCE_WORDS) > 0:
         signals += 1
@@ -64,13 +76,13 @@ def _score_stable_preference(lower: str) -> int:
     return signals if signals == 2 else 0
 
 
-def _score_identity_trait(lower: str) -> int:
+def _score_identity(lower: str) -> int:
     if any(w in lower for w in TEMPORARY_LANGUAGE):
         return 0
     return sum(1 for p in IDENTITY_PHRASES if p in lower)
 
 
-def _score_humor_style(lower: str) -> int:
+def _score_humor(lower: str) -> int:
     signals = 0
     if _count_hits(lower, HUMOR_TERMS) > 0:
         signals += 1
@@ -79,7 +91,11 @@ def _score_humor_style(lower: str) -> int:
     return signals
 
 
-def _score_temporary_phase(lower: str) -> int:
+def _score_fact(lower: str) -> int:
+    return _score_preference(lower) + _score_identity(lower) + _score_humor(lower)
+
+
+def _score_temporary(lower: str) -> int:
     signals = 0
     if _count_hits(lower, TEMPORARY_TIMEFRAMES) > 0:
         signals += 1
@@ -88,20 +104,24 @@ def _score_temporary_phase(lower: str) -> int:
     return signals
 
 
-def _score_harmful_pattern(lower: str, source_type: str) -> int:
-    signals = 0
-    if _count_hits(lower, HARMFUL_BEHAVIOR_INDICATORS) > 0:
-        signals += 1
-    if source_type == "soulgate_inferred":
-        signals += 1
-    return signals
-
-
-def _score_support_context(lower: str) -> int:
+def _score_support(lower: str) -> int:
     signals = 0
     if _count_hits(lower, SUPPORT_EMOTIONAL_WORDS) > 0:
         signals += 1
     if _count_hits(lower, SUPPORT_TIMEFRAMES) > 0:
+        signals += 1
+    return signals
+
+
+def _score_phase(lower: str) -> int:
+    return _score_temporary(lower) + _score_support(lower)
+
+
+def _score_watch(lower: str, source_type: str) -> int:
+    signals = 0
+    if _count_hits(lower, HARMFUL_BEHAVIOR_INDICATORS) > 0:
+        signals += 1
+    if source_type == "soulgate_inferred":
         signals += 1
     return signals
 
@@ -118,12 +138,9 @@ def classify_memory(text: str, source_type: str = "user") -> dict:
     lower = text.lower()
 
     scores = {
-        "harmful_pattern": _score_harmful_pattern(lower, source_type),
-        "stable_preference": _score_stable_preference(lower),
-        "identity_trait": _score_identity_trait(lower),
-        "humor_style": _score_humor_style(lower),
-        "temporary_phase": _score_temporary_phase(lower),
-        "support_context": _score_support_context(lower),
+        "watch": _score_watch(lower, source_type),
+        "fact": _score_fact(lower),
+        "phase": _score_phase(lower),
     }
 
     best_type = None
@@ -136,20 +153,13 @@ def classify_memory(text: str, source_type: str = "user") -> dict:
 
     if best_type is None:
         return {
-            "memory_type": "task_context",
+            "memory_type": "context",
             "confidence": "medium",
-            "identity_weight": BASE_TYPE_INFO["task_context"]["identity_weight"],
             "summary": text[:280],
         }
 
-    confidence = _confidence_for(best_score)
-    identity_weight = BASE_TYPE_INFO[best_type]["identity_weight"]
-    if confidence == "high" and identity_weight == "medium":
-        identity_weight = "high"
-
     return {
         "memory_type": best_type,
-        "confidence": confidence,
-        "identity_weight": identity_weight,
+        "confidence": _confidence_for(best_score),
         "summary": text[:280],
     }
