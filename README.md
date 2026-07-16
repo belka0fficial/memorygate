@@ -251,6 +251,24 @@ demotes to `deprecated` at `contradiction_count >= 3`. Manual transitions:
 `POST /pattern/{id}/confirm`, `POST /pattern/{id}/contradict`,
 `GET /pattern/active/{agent_id}`, `GET /pattern/candidates/{agent_id}`.
 
+Since this function reclusters and reprocesses on *every* observation
+create for the signal_type (not just ones that join a given cluster), an
+existing pattern's `confirmation_count` only increments when its cluster
+actually grew (`len(members) > instance_count`) — otherwise an unrelated
+observation of the same signal_type would silently re-confirm every
+existing pattern of that type each time it was created, running
+`confirmation_count` arbitrarily far ahead of `instance_count`. Confidence
+is also hard-capped at `MAX_PATTERN_CONFIDENCE = 0.95` everywhere it's
+set (`POST /pattern/create`, `/update/{id}`, `/promote`) — 100% confidence
+would make a pattern impossible to deprecate, which breaks the honesty
+the whole promote/deprecate pipeline depends on. The dashboard's
+`PatternsScreen.jsx` computes its own displayed confidence
+(`confirmation_count / (confirmation_count + contradiction_count)`,
+falling back to the stored value when there's no evidence yet) rather
+than reading the stored field directly, so it has its own matching
+`MAX_CONFIDENCE = 0.95` clamp — the backend cap alone doesn't reach this
+derived ratio.
+
 ## Session transcripts (`models/session_transcript.py`)
 
 The "remember everything" layer, sitting below the signal filter entirely:
@@ -275,8 +293,11 @@ string) from recent state — last-24h emotional-signal observation, entity
 event "streaks", top-2 open clarifications (`Observation` rows with
 `needs_clarification=True`, ordered by `hypothesis_confidence` as the
 importance proxy now that there's no dedicated importance column),
-in-progress `project` entities touched in the last 21 days, `human`
-entities with recent activity or `attributes.scheduled_for == today`, and
+in-progress `project` entities touched in the last 21 days (deduped by
+normalized entity name, keeping whichever copy has been stuck longer, in
+case the entities table has duplicates the dedup migration hasn't caught
+yet), `human` entities with recent activity or
+`attributes.scheduled_for == today`, and
 recent `watch`-type memories as watch flags. Several fields ride on
 `entities.attributes_json` (project `status`/`sessions_stuck`, person
 `warmth_level`/`note`/`scheduled_for`) rather than new columns, since that
@@ -322,7 +343,7 @@ both are present); omitted entirely, it defaults to `"default"`. If
 requires `X-MemoryGate-Key` — see "Authentication" above.
 
 ### `/memory`
-- `POST /memory/write` — `{agent_id?, text, source_type?, memory_type?, confidence?, do_not_generalize?, review_by?, tags?}` → signal filter, then classifies (or accepts overrides — old 7-type names are normalized to the current 4, see "Memory classification"), dedupes (exact text, then agent-scoped vector novelty check), upgrades or inserts, returns `{status, id, memory_type, summary, upgraded?, duplicate_of?, near_duplicate_of?, similarity?, low_novelty?}` or `{status: "filtered", reason: "low value"}`. `review_by` auto-defaults to +14 days if the resolved type is `phase` and none was given.
+- `POST /memory/write` — `{agent_id?, text, source_type?, memory_type?, confidence?, do_not_generalize?, review_by?, tags?}` → signal filter, then classifies (or accepts overrides — old 7-type names are normalized to the current 4, see "Memory classification"), dedupes (exact text, then agent-scoped vector novelty check), upgrades or inserts, returns `{status, id, memory_type, summary, upgraded?, duplicate_of?, near_duplicate_of?, similarity?, low_novelty?}` or `{status: "filtered", reason: "low value"}`. `review_by` auto-defaults to +14 days if the resolved type is `phase` and none was given. An explicit `memory_type` override that isn't one of the 4 current types or a recognized legacy alias gets a `422`, not a silent pass-through.
 - `POST /memory/search` — `{agent_id?, query}` → Qdrant nearest-neighbor + rescoring, or ILIKE fallback, both agent-scoped. Returns `{results: [...]}`; each result carries the raw Qdrant cosine `similarity` score (omitted on the ILIKE-fallback path, since there's no vector score to report) alongside `updated_at`.
 - `GET /memory` — last 100 memories for the caller's agent, newest first.
 - `GET /memory/{id}` — single memory, 404 if missing or owned by a different agent.
@@ -330,7 +351,8 @@ requires `X-MemoryGate-Key` — see "Authentication" above.
 - `DELETE /memory/{id}` — removes the row and its Qdrant point; logs a `delete` audit row.
 
 ### `/entity`
-- `POST /entity/create` — now takes `agent_notes`/`agent_summary` (renamed from `conker_notes`/`conker_summary` — any agent can keep its own notes on an entity now, not just Conker).
+- `POST /entity/create` — now takes `agent_notes`/`agent_summary` (renamed from `conker_notes`/`conker_summary` — any agent can keep its own notes on an entity now, not just Conker). Dedup-checks first: exact name match (case/whitespace-insensitive, scoped to `agent_id`+`entity_type`), then embedding similarity (`>= 0.9`, its own Qdrant collection) — a hit merges the incoming tags/attributes/description into the existing row and returns it with `deduplicated: true` instead of inserting a new one.
+- `POST /entity/merge` — `{keep_entity_id, merge_entity_id}`. Manual merge for near-duplicates the create-time dedup didn't catch (below the similarity threshold, or two entities with genuinely different names that a human recognizes as the same thing) — repoints `entity_edges`/`entity_events`/`entity_history` and the `entity_ids_json`/`applies_to_entity_ids_json` membership on `observations`/`patterns`, merges tags/attributes/description into `keep_entity_id`, deletes `merge_entity_id`. Backs the entity graph's merge action (select two nodes → pick which to keep).
 - `GET /entity` — last 100 entities for the caller's agent, newest-updated first (mirrors `GET /memory`).
 - `GET /entity/{id}`
 - `DELETE /entity/{id}` — hard delete. Doesn't cascade to `entity_edges`/`entity_events`/`entity_history`; orphaned edges are simply invisible to callers that only ever request edges for entities that still exist (the dashboard's graph, for one, filters edges to nodes actually in its current node set).
@@ -343,13 +365,13 @@ requires `X-MemoryGate-Key` — see "Authentication" above.
 - `GET /entity/{id}/history` — full `entity_history` audit trail.
 
 ### `/observation`
-- `POST /observation/create` — `{agent_id?, session_id?, signal_type, description, raw_context?, hypothesis?, hypothesis_confidence?, status?, confirmed_by?, trigger_context?, max_exposures?, raise_condition?, needs_clarification?, entity_ids?, related_observation_ids?}` — dedup-checks first (see "Observation lifecycle" above); on a miss, enforces the active-observation budget, then inserts and runs pattern promotion.
+- `POST /observation/create` — `{agent_id?, session_id?, signal_type, description, raw_context?, hypothesis, hypothesis_confidence?, status?, confirmed_by?, trigger_context?, max_exposures?, raise_condition?, needs_clarification?, entity_ids?, related_observation_ids?}` — `hypothesis` is required (non-empty); an observation with nothing to confirm or contradict defeats the whole lifecycle, so the API rejects it with a `422` rather than accepting one. Dedup-checks first (see "Observation lifecycle" above); on a miss, enforces the active-observation budget, then inserts and runs pattern promotion.
 - `POST /observation/search` — `{agent_id?, query?, signal_type?, status?, entity_id?, needs_clarification?}`, agent-scoped at the SQL level, then filtered/substring-matched in Python, capped at 50 results.
 - `GET /observation/active` — all non-archived observations for the caller's agent; accepts an optional `needs_clarification` query param.
 - `POST /observation/session-context` — `{agent_id?, session_context}` → exposure tracking, see above.
 - `GET /observation/{id}`
 - `DELETE /observation/{id}` — hard delete (row + its Qdrant point in the dedup collection), distinct from `POST /observation/{id}/archive` below, which is a soft, reversible-in-spirit status transition, not a deletion.
-- `POST /observation/update/{id}` — partial update (status, hypothesis, hypothesis_confidence, confirmed_by, trigger_context, raise_condition, needs_clarification, related_observation_ids).
+- `POST /observation/update/{id}` — partial update (status, hypothesis, hypothesis_confidence, confirmed_by, trigger_context, raise_condition, needs_clarification, related_observation_ids). `hypothesis`, if given, can't be blanked to `""` — same non-empty rule as create.
 - `POST /observation/{id}/confirm` — `{confirmed_by?}` → status=confirmed, `confirmation_count += 1`, runs pattern promotion.
 - `POST /observation/{id}/contradict` — `{reason?}` → status=contradicted.
 - `POST /observation/{id}/archive` — `{reason?}` → status=archived, `archived_at` set.
@@ -372,6 +394,7 @@ lifecycle" above; use `/observation` with `needs_clarification` instead.
 - `GET /transcripts/{agent_id}` — session list, metadata only (`id`, `session_id`, `session_start`/`session_end`, `word_count`, `processed_by_soulgate`, `created_at`) — no transcript text.
 - `GET /transcripts/{id}/full` — metadata plus the full `transcript` text. The one route in this group most worth gating behind `MEMORYGATE_ADMIN_KEY`.
 - `POST /transcripts/{id}/reprocess` — flips `processed_by_soulgate` back to `false`; not in the original spec, added to back the dashboard's "Re-process with SoulGate" button. MemoryGate doesn't invoke SoulGate itself.
+- `POST /transcripts/{id}/mark-processed` — flips `processed_by_soulgate` to `true`. Also not in the original spec, but necessary: nothing else in this codebase ever set the flag to `true`, so a transcript could never show as processed even after SoulGate genuinely finished with it. SoulGate should call this once it's done extracting from a transcript.
 
 ### `/config`
 - `GET /config/{agent_id}` — `{agent_id, novelty_threshold, value_threshold, max_observations, signal_filter_enabled}`, created with defaults on first read.
@@ -480,9 +503,12 @@ no `MEMORYGATE_ADMIN_KEY` configured, `/auth/check` always succeeds
 regardless of what's typed.
 
 **Agent selector**: a dropdown in the sidebar (also shown large/centered
-at the top of the Briefing screen) — `All | Conker | Emolga | + Add`.
-Conker and Emolga are built in with fixed colors (blue `#3B82F6`, green
-`#10B981`); `+ Add` registers an arbitrary extra `agent_id`, persisted to
+at the top of the Briefing screen) — `All | Conker | Emolga | Conker (dev) | + Add`.
+Conker, Emolga, and Conker (dev) are built in with fixed colors (blue
+`#3B82F6`, green `#10B981`, gray `#6B7280`) — Conker (dev) is isolated by
+`agent_id` like any other agent, meant for manual testing/experiments so
+they never mix into Conker's real data; `+ Add` registers an arbitrary
+extra `agent_id`, persisted to
 `localStorage` and assigned a color from a small rotating palette. Every
 screen scopes its requests to whichever agent is selected; `All` fans the
 same requests out across every known agent in parallel and merges the
@@ -500,9 +526,9 @@ Observations instead.
 - **Overview** — four stat cards (memories/entities/active patterns/pending clarifications), three signal-health meters (observation→pattern promotion rate, signal-filter rejection rate, memory novelty rate — all derived client-side from `/audit` + list endpoints, see the `/audit` note above), and a merged activity feed (last 20 events across memories/entities/observations/patterns, newest first — a `needs_clarification` observation gets its own feed color rather than double-counting as both).
 - **Beliefs** — the user-facing view, "what Conker believes about you": active patterns rendered as plain sentences (`interpretation` or `pattern_name`) with confirmation count, expand-to-evidence (fetches the pattern's `observation_ids` on demand); high-confidence memories (`confidence === "high"`) below, each with its own expand — memories have no observation links in the data model, so their "evidence" is honestly just their own text, not fabricated.
 - **Memories** (Debug) — debounced (300ms) semantic search with similarity % on results, type/confidence/sort filters, 2-column cards with a `do_not_generalize` flag icon and a `review_by` date shown on `phase`-type cards, a right-side detail panel (edit text/type/confidence/do_not_generalize/review_by/tags, delete), and an Add Memory modal. No `identity_weight` anywhere — that column is gone.
-- **Entities** — **Graph** and **Table** view toggle. Graph: D3 force layout, node color by `entity_type`, node radius by `importance_level`, edges dashed when `direction="bidirectional"`, pan/zoom controls + type-filter checkboxes + a search-and-highlight box overlaid top-right, a floating-action-button to add an entity. Table: sortable columns, 25/page pagination. Both open the same right-side detail panel — editable name/description/agent_notes/agent_summary/importance/tags, a collapsible raw-JSON attributes editor, and Connections/Events/History tabs (the Connections tab is where Add Connection lives, with a relationship-type suggestion list, a strength slider, and a directed/bidirectional radio).
-- **Observations** (Debug) — Active/Confirmed/Contradicted/Archived tabs (the four `status` values, "Active" being the friendlier label for `unconfirmed`), signal-type filter, a "needs clarification only" checkbox filter, an exposure bar color-coded by how close `exposure_count` is to `max_exposures`, an amber "Pattern candidate" flag at `confirmation_count >= 3`, a "Needs clarification" badge + muted `raise if {raise_condition}` line on flagged cards, click-to-expand-inline (not a side panel) for the full edit form (including raise_condition/needs_clarification) + delete, and an Add Observation modal with debounced entity search for `entity_ids`.
-- **Patterns** (Debug) — Active and collapsible Candidates sections, confirmation/contradiction count bars, a derived confidence % (`confirmations / (confirmations + contradictions)`, falling back to the stored `confidence` when both are zero), "N more confirmations to activate" on candidates, Confirm/Contradict/Dismiss (Dismiss sets `status="deprecated"` via `POST /pattern/update/{id}` — there's no dedicated dismiss endpoint, candidates just don't have one, unlike observations).
+- **Entities** — **Graph** and **Table** view toggle. Graph: D3 force layout, node color by `entity_type`, node radius by `importance_level`, edges dashed when `direction="bidirectional"`, pan/zoom controls + type-filter checkboxes + a search-and-highlight box overlaid top-right, a floating-action-button to add an entity, and a merge toggle (amber icon in the control cluster) — click it, click two nodes to select them (amber ring), pick which one to keep, confirm; calls `POST /entity/merge` and updates the graph in place. Table: sortable columns, 25/page pagination. Both open the same right-side detail panel — editable name/description/agent_notes/agent_summary/importance/tags, a collapsible raw-JSON attributes editor, and Connections/Events/History tabs (the Connections tab is where Add Connection lives, with a relationship-type suggestion list, a strength slider, and a directed/bidirectional radio).
+- **Observations** (Debug) — Active/Confirmed/Contradicted/Archived tabs (the four `status` values, "Active" being the friendlier label for `unconfirmed`), signal-type filter, a "needs clarification only" checkbox filter, a labeled exposure bar (color-coded by how close `exposure_count` is to `max_exposures`, with an "Exposure" caption and a tooltip explaining the archive-at-max behavior) and a confidence badge that reads "N% confidence" rather than a bare percentage, an amber "Pattern candidate" flag at `confirmation_count >= 3`, a "Needs clarification" badge + muted `raise if {raise_condition}` line on flagged cards, click-to-expand-inline (not a side panel) for the full edit form (including raise_condition/needs_clarification) + delete, and an Add Observation modal with debounced entity search for `entity_ids`.
+- **Patterns** (Debug) — Active and collapsible Candidates sections, confirmation/contradiction count bars, a derived confidence % (`confirmations / (confirmations + contradictions)`, falling back to the stored `confidence` when both are zero, capped at 95% — see "Pattern promotion" above), "N more confirmations to activate" on candidates, Confirm/Contradict/Dismiss (Dismiss sets `status="deprecated"` via `POST /pattern/update/{id}` — there's no dedicated dismiss endpoint, candidates just don't have one, unlike observations).
 - **Briefing** — renders the `GET /briefing/{agent_id}` object section by section (emotional state, mood + streak pills, up to 2 open clarifications, active tasks, a horizontal row of person cards with initials avatars and a warmth bar, red watch-flag pills), plus a live token counter (`Math.ceil(JSON.stringify(briefing).length / 4)`, same rough estimate the backend uses for its 300-token trim) with a green/amber/red progress bar and a Refresh button.
 - **Transcripts** — session list (date, session ID, word count, processed badge); clicking one opens a full-text reading view in monospace with alternating speaker shading (a `^Speaker: text$`-per-line regex parser, since transcripts have no structured turn format — lines with no matching prefix continue the previous turn), an in-transcript search box that highlights matches, and a "Re-process with SoulGate" button (`POST /transcripts/{id}/reprocess`).
 
@@ -599,5 +625,24 @@ because they're generically useful for future UI changes:
   (`lib/agentScope.js` calling every known-agent request in parallel and
   merging); there's no bulk cross-agent endpoint, so it makes `N×` the
   requests of a single-agent view and only knows about agents the browser
-  has locally recorded (built-in Conker/Emolga, plus anything added via
-  "+ Add" in *that* browser's `localStorage`).
+  has locally recorded (built-in Conker/Emolga/Conker (dev), plus anything
+  added via "+ Add" in *that* browser's `localStorage`).
+- `entity_type` is unvalidated free text (unlike `memory_type`, which is
+  now a hard-enforced 4-value enum - see "Memory classification"). Nothing
+  in MemoryGate stops a caller from creating an entity for something that
+  should have been a memory instead - e.g. a bare preference like "dark
+  mode" filed as a `concept` entity rather than a `fact` memory, which
+  then shows up as a graph node with no edges and no events, forever.
+  `concept`/`habit` are legitimate entity types for things that genuinely
+  have relational structure (a recurring habit with logged events, a topic
+  linked to multiple people) - the failure mode is a caller (SoulGate)
+  reaching for one when a plain attribute would do. MemoryGate can dedup
+  and merge bad entities (`POST /entity/merge`, or the graph's merge
+  action) once they exist, and a human can always delete one outright, but
+  it can't tell a well-formed "this concept has relationships worth
+  tracking" call from a mis-filed preference at write time - that
+  judgment call happens entirely on the extraction side, outside this
+  codebase. Same story for `classifier.py`'s keyword-heuristic `watch`
+  detection (see above): it fires on literal phrases like "keep doing" /
+  "can't stop", so text that happens to contain testing/QA language can
+  trip it as readily as a real harmful pattern.
