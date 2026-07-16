@@ -6,7 +6,9 @@ class ObservationCreateRequest(BaseModel):
     signal_type: str
     description: str
     raw_context: str = ""
-    hypothesis: str = ""
+    # required: an observation without a hypothesis is nothing to confirm or
+    # contradict, which is the entire point of the observation lifecycle.
+    hypothesis: str = Field(min_length=1)
     hypothesis_confidence: float = 0.5
     status: str = "unconfirmed"
     confirmed_by: str = ""
@@ -27,7 +29,7 @@ class ObservationSearchRequest(BaseModel):
 
 class ObservationUpdateRequest(BaseModel):
     status: str | None = None
-    hypothesis: str | None = None
+    hypothesis: str | None = Field(default=None, min_length=1)
     hypothesis_confidence: float | None = None
     confirmed_by: str | None = None
     trigger_context: str | None = None

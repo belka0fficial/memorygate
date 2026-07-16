@@ -87,7 +87,7 @@ def _active_tasks(db, agent_id: str) -> list[dict]:
         select(Entity).where(Entity.agent_id == agent_id, Entity.entity_type == "project")
     ).scalars().all()
 
-    tasks = []
+    tasks: dict[str, dict] = {}
     for entity in rows:
         attrs = _attrs(entity)
         if attrs.get("status") == "completed":
@@ -102,15 +102,22 @@ def _active_tasks(db, agent_id: str) -> list[dict]:
         if not last_event:
             continue
 
-        tasks.append({
+        # Same-topic tasks can still show up as separate entity rows (e.g.
+        # duplicate entities not yet caught by the dedup migration) - key on
+        # normalized name so the briefing never surfaces the same task twice,
+        # keeping whichever copy has been stuck longer.
+        key = " ".join(entity.name.strip().lower().split())
+        candidate = {
             "entity_id": entity.id,
             "name": entity.name,
             "status": attrs.get("status", ""),
             "sessions_stuck": attrs.get("sessions_stuck", 0),
-        })
+        }
+        existing = tasks.get(key)
+        if existing is None or candidate["sessions_stuck"] > existing["sessions_stuck"]:
+            tasks[key] = candidate
 
-    tasks.sort(key=lambda t: t["sessions_stuck"], reverse=True)
-    return tasks
+    return sorted(tasks.values(), key=lambda t: t["sessions_stuck"], reverse=True)
 
 
 def _people_relevant(db, agent_id: str) -> list[dict]:

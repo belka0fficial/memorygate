@@ -12,6 +12,8 @@ from app.schemas.entity import (
     EntityEventCreateRequest,
     EntityUpdateByIdRequest,
 )
+from app.services.entity_dedup import find_duplicate
+from app.services.qdrant_store import upsert_entity_embedding, delete_entity_embedding
 
 router = APIRouter(prefix="/entity", tags=["entity"])
 
@@ -53,6 +55,41 @@ def create_entity(payload: EntityCreateRequest, header_agent_id: str = Depends(g
     agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
+        dup = find_duplicate(db, agent_id, payload.entity_type, payload.name)
+        if dup:
+            before = _entity_to_dict(dup)
+
+            old_tags = json.loads(dup.tags_json)
+            merged_tags = list(old_tags)
+            for tag in payload.tags:
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+            dup.tags_json = json.dumps(merged_tags)
+
+            merged_attrs = json.loads(dup.attributes_json)
+            for key, value in payload.attributes.items():
+                merged_attrs.setdefault(key, value)
+            dup.attributes_json = json.dumps(merged_attrs)
+
+            dup.description = dup.description or payload.description
+            dup.agent_notes = dup.agent_notes or payload.agent_notes
+            dup.agent_summary = dup.agent_summary or payload.agent_summary
+
+            db.commit()
+            db.refresh(dup)
+
+            db.add(EntityHistory(
+                entity_id=dup.id,
+                changed_field="entity_deduplicated",
+                old_value_json=json.dumps(before),
+                new_value_json=json.dumps(_entity_to_dict(dup)),
+                change_reason="create request matched an existing entity - merged instead of duplicating",
+                triggered_by="system",
+            ))
+            db.commit()
+
+            return {"status": "ok", "entity": _entity_to_dict(dup), "deduplicated": True}
+
         entity = Entity(
             agent_id=agent_id,
             entity_type=payload.entity_type,
@@ -67,6 +104,8 @@ def create_entity(payload: EntityCreateRequest, header_agent_id: str = Depends(g
         db.add(entity)
         db.commit()
         db.refresh(entity)
+
+        upsert_entity_embedding(entity.id, entity.name, payload={"agent_id": agent_id, "entity_type": entity.entity_type})
 
         db.add(EntityHistory(
             entity_id=entity.id,
@@ -89,6 +128,13 @@ def delete_entity(entity_id: str, agent_id: str = Depends(get_agent_id)):
         row = _get_owned_entity(db, entity_id, agent_id)
         db.delete(row)
         db.commit()
+        try:
+            delete_entity_embedding(entity_id)
+        except Exception:
+            # Postgres (the source of truth) already committed the delete -
+            # a stale/malformed Qdrant point shouldn't turn a successful
+            # delete into a 500.
+            pass
         return {"status": "ok"}
     finally:
         db.close()
@@ -131,6 +177,7 @@ def update_entity(entity_id: str, payload: EntityUpdateRequest, agent_id: str = 
         row = _get_owned_entity(db, entity_id, agent_id)
 
         before = _entity_to_dict(row)
+        name_changed = payload.name is not None and payload.name != row.name
 
         if payload.name is not None:
             row.name = payload.name
@@ -149,6 +196,9 @@ def update_entity(entity_id: str, payload: EntityUpdateRequest, agent_id: str = 
 
         db.commit()
         db.refresh(row)
+
+        if name_changed:
+            upsert_entity_embedding(row.id, row.name, payload={"agent_id": row.agent_id, "entity_type": row.entity_type})
 
         after = _entity_to_dict(row)
 
@@ -327,6 +377,7 @@ def update_entity_by_id(payload: EntityUpdateByIdRequest, agent_id: str = Depend
         row = _get_owned_entity(db, payload.entity_id, agent_id)
 
         before = _entity_to_dict(row)
+        name_changed = payload.name is not None and payload.name != row.name
 
         if payload.name is not None:
             row.name = payload.name
@@ -345,6 +396,9 @@ def update_entity_by_id(payload: EntityUpdateByIdRequest, agent_id: str = Depend
 
         db.commit()
         db.refresh(row)
+
+        if name_changed:
+            upsert_entity_embedding(row.id, row.name, payload={"agent_id": row.agent_id, "entity_type": row.entity_type})
 
         after = _entity_to_dict(row)
 

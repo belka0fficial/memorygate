@@ -5,6 +5,7 @@ from app.core.config import QDRANT_URL, QDRANT_COLLECTION, EMBED_DIMENSION
 from app.services.embeddings import embed_text
 
 OBSERVATION_COLLECTION = f"{QDRANT_COLLECTION}_observations"
+ENTITY_COLLECTION = f"{QDRANT_COLLECTION}_entities"
 
 
 @lru_cache(maxsize=1)
@@ -29,6 +30,10 @@ def ensure_qdrant_collection() -> None:
 
 def ensure_observation_collection() -> None:
     _ensure_collection(OBSERVATION_COLLECTION)
+
+
+def ensure_entity_collection() -> None:
+    _ensure_collection(ENTITY_COLLECTION)
 
 
 def _build_filter(agent_id: str | None = None, extra: dict | None = None) -> Filter | None:
@@ -126,6 +131,49 @@ def find_similar_observations(
         collection_name=OBSERVATION_COLLECTION,
         query_vector=query_vector,
         query_filter=_build_filter(agent_id, {"signal_type": signal_type}),
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return [
+        {
+            "id": str(hit.id),
+            "score": float(hit.score),
+            "payload": hit.payload or {},
+        }
+        for hit in hits
+    ]
+
+
+def upsert_entity_embedding(entity_id: str, text: str, payload: dict | None = None) -> None:
+    client = get_qdrant_client()
+    vector = embed_text(text)
+    client.upsert(
+        collection_name=ENTITY_COLLECTION,
+        points=[
+            PointStruct(
+                id=entity_id,
+                vector=vector,
+                payload=payload or {},
+            )
+        ],
+    )
+
+
+def delete_entity_embedding(entity_id: str) -> None:
+    client = get_qdrant_client()
+    client.delete(collection_name=ENTITY_COLLECTION, points_selector=[entity_id])
+
+
+def find_similar_entities(
+    text: str, agent_id: str, entity_type: str | None = None, limit: int = 3
+) -> list[dict]:
+    client = get_qdrant_client()
+    query_vector = embed_text(text)
+    hits = client.search(
+        collection_name=ENTITY_COLLECTION,
+        query_vector=query_vector,
+        query_filter=_build_filter(agent_id, {"entity_type": entity_type}),
         limit=limit,
         with_payload=True,
         with_vectors=False,

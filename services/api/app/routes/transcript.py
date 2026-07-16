@@ -86,3 +86,20 @@ def reprocess_transcript(transcript_id: str, agent_id: str = Depends(get_agent_i
         return {"status": "ok", "transcript": _summary_dict(row)}
     finally:
         db.close()
+
+@router.post("/{transcript_id}/mark-processed")
+def mark_transcript_processed(transcript_id: str, agent_id: str = Depends(get_agent_id)):
+    """SoulGate calls this once it's done extracting memories/observations
+    from a transcript. Nothing else in this codebase ever sets
+    processed_by_soulgate=true - without this endpoint the flag can never
+    leave its false default, and a transcript SoulGate already processed
+    would look eligible for reprocessing (duplicate extraction) forever."""
+    db = SessionLocal()
+    try:
+        row = _get_owned_transcript(db, transcript_id, agent_id)
+        row.processed_by_soulgate = True
+        db.commit()
+        db.refresh(row)
+        return {"status": "ok", "transcript": _summary_dict(row)}
+    finally:
+        db.close()

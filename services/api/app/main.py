@@ -16,7 +16,7 @@ from app.models import entity
 from app.models import observation
 from app.models import pattern
 from app.models import session_transcript
-from app.services.qdrant_store import ensure_qdrant_collection, ensure_observation_collection
+from app.services.qdrant_store import ensure_qdrant_collection, ensure_observation_collection, ensure_entity_collection
 from app.services.embeddings import get_embedding_model, embed_text
 
 app = FastAPI(title="MemoryGate")
@@ -37,6 +37,7 @@ def startup():
     run_migrations(engine)
     ensure_qdrant_collection()
     ensure_observation_collection()
+    ensure_entity_collection()
     get_embedding_model()
     embed_text("warmup")
 

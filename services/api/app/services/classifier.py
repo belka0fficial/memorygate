@@ -35,6 +35,9 @@ LEGACY_TYPE_MAP = {
 }
 
 
+CURRENT_MEMORY_TYPES = {"fact", "phase", "context", "watch"}
+
+
 def normalize_memory_type(memory_type: str | None) -> str | None:
     if memory_type is None:
         return None

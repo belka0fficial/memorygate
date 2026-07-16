@@ -1,6 +1,6 @@
 """Additive, idempotent schema patches for tables that existed before agent
 isolation / observation lifecycle / the 4-type memory taxonomy / the
-clarification-into-observation merge were added.
+clarification-into-observation merge / entity dedup were added.
 
 `Base.metadata.create_all` (called before this, in main.py) only creates
 tables that don't exist yet — it never alters an existing table. A fresh
@@ -69,6 +69,7 @@ def run_migrations(engine: Engine) -> None:
 
         _migrate_memory_types(conn)
         _migrate_clarifications(conn)
+        _merge_duplicate_entities(conn)
 
 
 def _table_exists(conn, name: str) -> bool:
@@ -214,6 +215,101 @@ def _migrate_clarifications(conn) -> None:
         })
 
     conn.execute(text("DROP TABLE pending_clarifications"))
+
+
+def _merge_duplicate_entities(conn) -> None:
+    """One-time cleanup for entities created before POST /entity/create did
+    dedup (see services/entity_dedup.py). Groups by (agent_id, entity_type,
+    normalized name), keeps the oldest row per group as canonical, repoints
+    every reference to it, and drops the rest. Naturally idempotent: once
+    there's at most one row per group, the GROUP BY ... HAVING count(*) > 1
+    below returns nothing.
+
+    Doesn't touch Qdrant - the duplicate ids simply stop being referenced;
+    stale points there are harmless (never returned once the Postgres row
+    they'd resolve to is gone) and get cleaned up next time the API restarts
+    and this function no-ops.
+    """
+    groups = conn.execute(text(
+        """
+        SELECT array_agg(id ORDER BY created_at, id) AS ids
+        FROM entities
+        GROUP BY agent_id, entity_type, lower(trim(name))
+        HAVING count(*) > 1
+        """
+    )).fetchall()
+
+    if not groups:
+        return
+
+    replace_map: dict[str, str] = {}
+
+    for group in groups:
+        ids = list(group.ids)
+        canonical_id, duplicate_ids = ids[0], ids[1:]
+
+        rows = conn.execute(text(
+            "SELECT id, tags_json, attributes_json, description, agent_notes, agent_summary "
+            "FROM entities WHERE id = ANY(:ids)"
+        ), {"ids": ids}).fetchall()
+        by_id = {row.id: row for row in rows}
+        canonical = by_id[canonical_id]
+
+        merged_tags = list(json.loads(canonical.tags_json))
+        merged_attrs = dict(json.loads(canonical.attributes_json))
+        description = canonical.description
+        agent_notes = canonical.agent_notes
+        agent_summary = canonical.agent_summary
+
+        for dup_id in duplicate_ids:
+            dup = by_id[dup_id]
+            for tag in json.loads(dup.tags_json):
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+            for key, value in json.loads(dup.attributes_json).items():
+                merged_attrs.setdefault(key, value)
+            description = description or dup.description
+            agent_notes = agent_notes or dup.agent_notes
+            agent_summary = agent_summary or dup.agent_summary
+            replace_map[dup_id] = canonical_id
+
+        conn.execute(text(
+            "UPDATE entities SET tags_json = :tags, attributes_json = :attrs, "
+            "description = :description, agent_notes = :notes, agent_summary = :summary "
+            "WHERE id = :id"
+        ), {
+            "tags": json.dumps(merged_tags),
+            "attrs": json.dumps(merged_attrs),
+            "description": description,
+            "notes": agent_notes,
+            "summary": agent_summary,
+            "id": canonical_id,
+        })
+
+        for dup_id in duplicate_ids:
+            conn.execute(text("UPDATE entity_edges SET from_entity_id = :c WHERE from_entity_id = :d"), {"c": canonical_id, "d": dup_id})
+            conn.execute(text("UPDATE entity_edges SET to_entity_id = :c WHERE to_entity_id = :d"), {"c": canonical_id, "d": dup_id})
+            conn.execute(text("UPDATE entity_events SET entity_id = :c WHERE entity_id = :d"), {"c": canonical_id, "d": dup_id})
+            conn.execute(text("UPDATE entity_history SET entity_id = :c WHERE entity_id = :d"), {"c": canonical_id, "d": dup_id})
+
+    # entity_ids_json / applies_to_entity_ids_json are JSON arrays stored as
+    # TEXT (not native jsonb), so membership rewrites happen in Python.
+    for table, column in (("observations", "entity_ids_json"), ("patterns", "applies_to_entity_ids_json")):
+        rows = conn.execute(text(f"SELECT id, {column} FROM {table}")).fetchall()
+        for row in rows:
+            ids = json.loads(getattr(row, column))
+            if not any(i in replace_map for i in ids):
+                continue
+            new_ids = []
+            seen = set()
+            for i in ids:
+                mapped = replace_map.get(i, i)
+                if mapped not in seen:
+                    seen.add(mapped)
+                    new_ids.append(mapped)
+            conn.execute(text(f"UPDATE {table} SET {column} = :v WHERE id = :id"), {"v": json.dumps(new_ids), "id": row.id})
+
+    conn.execute(text("DELETE FROM entities WHERE id = ANY(:ids)"), {"ids": list(replace_map.keys())})
 
 
 def _rename_column(conn, table: str, old: str, new: str) -> None:

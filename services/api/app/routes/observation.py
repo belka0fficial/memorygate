@@ -174,7 +174,13 @@ def delete_observation(observation_id: str, agent_id: str = Depends(get_agent_id
         row = _get_owned_observation(db, observation_id, agent_id)
         db.delete(row)
         db.commit()
-        delete_observation_embedding(observation_id)
+        try:
+            delete_observation_embedding(observation_id)
+        except Exception:
+            # Postgres (the source of truth) already committed the delete -
+            # a stale/malformed Qdrant point shouldn't turn a successful
+            # delete into a 500.
+            pass
         return {"status": "ok"}
     finally:
         db.close()

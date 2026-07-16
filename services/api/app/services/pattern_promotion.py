@@ -18,6 +18,15 @@ MIN_CLUSTER_SIZE = 3
 PROMOTE_AT_CONFIRMATIONS = 5
 DEPRECATE_AT_CONTRADICTIONS = 3
 
+# A pattern that could reach 100% confidence could never be doubted, which
+# means it could never be deprecated - the whole pipeline's honesty depends
+# on deprecation staying reachable. Nothing sets confidence above this.
+MAX_PATTERN_CONFIDENCE = 0.95
+
+
+def clamp_confidence(value: float) -> float:
+    return min(value, MAX_PATTERN_CONFIDENCE)
+
 
 def _normalize(text: str) -> str:
     return " ".join(text.strip().lower().split())
@@ -66,8 +75,15 @@ def promote_from_observations(db, agent_id: str, signal_type: str | None = None)
         ).scalars().first()
 
         if existing:
-            existing.confirmation_count += 1
-            existing.instance_count = len(members)
+            new_size = len(members)
+            # this function reruns on every observation create for the
+            # signal_type, reclustering everything each time - only count it
+            # as a fresh confirmation when the cluster actually grew, or an
+            # unrelated observation of the same signal_type would silently
+            # re-confirm this pattern every time it's created.
+            if new_size > existing.instance_count:
+                existing.confirmation_count += 1
+            existing.instance_count = new_size
             existing.observation_ids_json = json.dumps(observation_ids)
             existing.last_confirmed_at = datetime.now(timezone.utc)
             maybe_promote(existing)

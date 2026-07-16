@@ -7,7 +7,7 @@ from app.core.agent import get_agent_id, resolve_agent_id
 from app.models.memory import Memory
 from app.models.audit import MemoryAudit
 from app.schemas.memory import MemoryWriteRequest, MemorySearchRequest, MemoryPatchRequest
-from app.services.classifier import classify_memory, normalize_memory_type
+from app.services.classifier import classify_memory, normalize_memory_type, CURRENT_MEMORY_TYPES
 from app.services.signal_filter import score_value, novelty_bucket, NOVELTY_DUPLICATE, NOVELTY_LOW
 from app.services.agent_config_service import get_or_create_config
 from app.services.qdrant_store import (
@@ -137,6 +137,12 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
         classified = classify_memory(payload.text, payload.source_type)
 
         final_memory_type = normalize_memory_type(payload.memory_type) or classified["memory_type"]
+        if final_memory_type not in CURRENT_MEMORY_TYPES:
+            raise HTTPException(
+                422,
+                f"Unrecognized memory_type '{payload.memory_type}'. "
+                f"Must be one of {sorted(CURRENT_MEMORY_TYPES)} (or a known legacy alias).",
+            )
         final_confidence = payload.confidence or classified["confidence"]
         final_summary = classified["summary"]
         final_do_not_generalize = payload.do_not_generalize if payload.do_not_generalize is not None else False
@@ -318,7 +324,14 @@ def patch_memory(memory_id: str, payload: MemoryPatchRequest, agent_id: str = De
         if payload.text is not None:
             row.text = payload.text
         if payload.memory_type is not None:
-            row.memory_type = normalize_memory_type(payload.memory_type)
+            normalized = normalize_memory_type(payload.memory_type)
+            if normalized not in CURRENT_MEMORY_TYPES:
+                raise HTTPException(
+                    422,
+                    f"Unrecognized memory_type '{payload.memory_type}'. "
+                    f"Must be one of {sorted(CURRENT_MEMORY_TYPES)} (or a known legacy alias).",
+                )
+            row.memory_type = normalized
         if payload.confidence is not None:
             row.confidence = payload.confidence
         if payload.do_not_generalize is not None:
@@ -362,7 +375,13 @@ def delete_memory(memory_id: str, agent_id: str = Depends(get_agent_id)):
         db.delete(row)
         db.commit()
 
-        delete_memory_embedding(memory_id)
+        try:
+            delete_memory_embedding(memory_id)
+        except Exception:
+            # Postgres (the source of truth) already committed the delete -
+            # a stale/malformed Qdrant point shouldn't turn a successful
+            # delete into a 500.
+            pass
 
         return {"status": "ok"}
     finally:

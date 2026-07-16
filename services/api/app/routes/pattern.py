@@ -14,7 +14,7 @@ from app.schemas.pattern import (
     PatternConfirmRequest,
     PatternContradictRequest,
 )
-from app.services.pattern_promotion import maybe_promote, DEPRECATE_AT_CONTRADICTIONS
+from app.services.pattern_promotion import maybe_promote, clamp_confidence, DEPRECATE_AT_CONTRADICTIONS
 
 router = APIRouter(prefix="/pattern", tags=["pattern"])
 
@@ -59,7 +59,7 @@ def create_pattern(payload: PatternCreateRequest, header_agent_id: str = Depends
             instance_count=payload.instance_count,
             confirmation_count=payload.confirmation_count,
             contradiction_count=payload.contradiction_count,
-            confidence=payload.confidence,
+            confidence=clamp_confidence(payload.confidence),
             interpretation=payload.interpretation,
             recommended_action=payload.recommended_action,
             applies_to_entity_ids_json=json.dumps(payload.applies_to_entity_ids),
@@ -157,7 +157,7 @@ def update_pattern(pattern_id: str, payload: PatternUpdateRequest, agent_id: str
         if payload.contradiction_count is not None:
             row.contradiction_count = payload.contradiction_count
         if payload.confidence is not None:
-            row.confidence = payload.confidence
+            row.confidence = clamp_confidence(payload.confidence)
         if payload.interpretation is not None:
             row.interpretation = payload.interpretation
         if payload.recommended_action is not None:
@@ -249,6 +249,7 @@ def promote_pattern(payload: PatternPromoteRequest, header_agent_id: str = Depen
                     seen.add(eid)
                     applies_to_entity_ids.append(eid)
 
+        confidence = clamp_confidence(payload.confidence)
         pattern = Pattern(
             agent_id=agent_id,
             pattern_name=payload.pattern_name,
@@ -257,13 +258,13 @@ def promote_pattern(payload: PatternPromoteRequest, header_agent_id: str = Depen
             instance_count=len(matched),
             confirmation_count=len(matched),
             contradiction_count=0,
-            confidence=payload.confidence,
+            confidence=confidence,
             interpretation=payload.interpretation,
             recommended_action=payload.recommended_action,
             applies_to_entity_ids_json=json.dumps(applies_to_entity_ids),
             context_conditions_json=json.dumps({}),
-            status="candidate" if payload.confidence < 0.85 else "active",
-            promoted_at=datetime.now(timezone.utc) if payload.confidence >= 0.85 else None,
+            status="candidate" if confidence < 0.85 else "active",
+            promoted_at=datetime.now(timezone.utc) if confidence >= 0.85 else None,
             last_confirmed_at=datetime.now(timezone.utc),
         )
         db.add(pattern)
