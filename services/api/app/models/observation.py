@@ -1,4 +1,4 @@
-from sqlalchemy import String, Text, DateTime, Float, Integer, func
+from sqlalchemy import String, Text, DateTime, Float, Integer, Boolean, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.db import Base
 import uuid
@@ -29,3 +29,8 @@ class Observation(Base):
     trigger_context: Mapped[str] = mapped_column(Text, default="")
     archived_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=True)
     archive_reason: Mapped[str] = mapped_column(Text, nullable=True)
+
+    # former pending_clarifications, merged in: an ambiguous signal queued to
+    # ask about later rather than guessed at now
+    raise_condition: Mapped[str] = mapped_column(Text, default="")
+    needs_clarification: Mapped[bool] = mapped_column(Boolean, default=False)

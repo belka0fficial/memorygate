@@ -1,17 +1,18 @@
 """Additive, idempotent schema patches for tables that existed before agent
-isolation / observation lifecycle / clarification importance / the 4-type
-memory taxonomy were added.
+isolation / observation lifecycle / the 4-type memory taxonomy / the
+clarification-into-observation merge were added.
 
 `Base.metadata.create_all` (called before this, in main.py) only creates
 tables that don't exist yet — it never alters an existing table. A fresh
 database gets the new columns for free straight from the model definitions.
 An existing database needs these run once at startup to catch up.
 """
+import json
 import uuid
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-_AGENT_ID_TABLES = ["memories", "entities", "observations", "patterns", "pending_clarifications"]
+_AGENT_ID_TABLES = ["memories", "entities", "observations", "patterns"]
 
 # old 7-type taxonomy -> current 4-type taxonomy (see services/classifier.py)
 _LEGACY_MEMORY_TYPE_MAP = {
@@ -24,6 +25,14 @@ _LEGACY_MEMORY_TYPE_MAP = {
     "harmful_pattern": "watch",
 }
 _CURRENT_MEMORY_TYPES = ("fact", "phase", "context", "watch")
+
+# pending_clarifications.status -> the observation.status its merged row gets
+_CLARIFICATION_STATUS_MAP = {
+    "pending": "unconfirmed",
+    "asked": "unconfirmed",
+    "resolved": "confirmed",
+    "dismissed": "archived",
+}
 
 
 def run_migrations(engine: Engine) -> None:
@@ -58,11 +67,14 @@ def run_migrations(engine: Engine) -> None:
             "ALTER TABLE observations ADD COLUMN IF NOT EXISTS archive_reason TEXT"
         ))
 
-        conn.execute(text(
-            "ALTER TABLE pending_clarifications ADD COLUMN IF NOT EXISTS importance FLOAT NOT NULL DEFAULT 0.5"
-        ))
-
         _migrate_memory_types(conn)
+        _migrate_clarifications(conn)
+
+
+def _table_exists(conn, name: str) -> bool:
+    return conn.execute(text(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = :t"
+    ), {"t": name}).first() is not None
 
 
 def _migrate_memory_types(conn) -> None:
@@ -85,10 +97,10 @@ def _migrate_memory_types(conn) -> None:
     # 'low_confidence' memories were never durable memories - they were
     # unconfirmed signals that landed in the wrong table. Move them to
     # observations (their proper home) instead of remapping their type.
-    # Only the columns that exist at this point in the migration sequence
-    # are populated here; raise_condition/needs_clarification (added by the
-    # clarification-merge migration, if it hasn't run yet) get their column
-    # defaults applied retroactively to these rows when it does.
+    # Only columns that exist at this point in the migration sequence are
+    # populated here; raise_condition/needs_clarification (added below by
+    # _migrate_clarifications, which always runs after this) get their
+    # column defaults applied retroactively to these rows too.
     low_confidence_rows = conn.execute(text(
         "SELECT id, agent_id, text, created_at FROM memories WHERE memory_type = 'low_confidence'"
     )).fetchall()
@@ -135,6 +147,73 @@ def _migrate_memory_types(conn) -> None:
     ))
 
     conn.execute(text("ALTER TABLE memories DROP COLUMN IF EXISTS identity_weight"))
+
+
+def _migrate_clarifications(conn) -> None:
+    conn.execute(text(
+        "ALTER TABLE observations ADD COLUMN IF NOT EXISTS raise_condition TEXT NOT NULL DEFAULT ''"
+    ))
+    conn.execute(text(
+        "ALTER TABLE observations ADD COLUMN IF NOT EXISTS needs_clarification BOOLEAN NOT NULL DEFAULT false"
+    ))
+
+    if not _table_exists(conn, "pending_clarifications"):
+        return
+
+    # this table predates agent isolation too - make sure agent_id is
+    # populated before reading it out below, same as every other legacy table.
+    conn.execute(text(
+        "ALTER TABLE pending_clarifications ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT 'default'"
+    ))
+    conn.execute(text(
+        "ALTER TABLE pending_clarifications ADD COLUMN IF NOT EXISTS importance FLOAT NOT NULL DEFAULT 0.5"
+    ))
+
+    rows = conn.execute(text(
+        "SELECT id, agent_id, session_id, observed_at, what_happened, hypotheses_json, "
+        "status, resolved_answer, ask_after, importance, entity_ids_json, related_observation_ids_json "
+        "FROM pending_clarifications"
+    )).fetchall()
+
+    for row in rows:
+        raw_context = json.dumps({
+            "migrated_from": "pending_clarifications",
+            "hypotheses": json.loads(row.hypotheses_json) if row.hypotheses_json else [],
+            "resolved_answer": row.resolved_answer,
+            "importance": row.importance,
+        })
+        conn.execute(text(
+            """
+            INSERT INTO observations (
+                id, agent_id, session_id, observed_at, signal_type, description,
+                raw_context, hypothesis, hypothesis_confidence, status, confirmed_by,
+                entity_ids_json, related_observation_ids_json, confirmation_count,
+                exposure_count, max_exposures, trigger_context, raise_condition,
+                needs_clarification
+            ) VALUES (
+                :id, :agent_id, :session_id, :observed_at, 'verbal', :description,
+                :raw_context, '', :importance, :status, '',
+                :entity_ids_json, :related_observation_ids_json, 0,
+                0, 5, '', :raise_condition, true
+            )
+            """
+        ), {
+            "id": row.id,
+            "agent_id": row.agent_id,
+            "session_id": row.session_id,
+            "observed_at": row.observed_at,
+            "description": row.what_happened,
+            "raw_context": raw_context,
+            # hypothesis_confidence doubles as the importance-ordering signal
+            # post-merge (see services/briefing.py) - importance was already 0-1.
+            "importance": min(1.0, max(0.0, row.importance if row.importance is not None else 0.5)),
+            "status": _CLARIFICATION_STATUS_MAP.get(row.status, "unconfirmed"),
+            "entity_ids_json": row.entity_ids_json or "[]",
+            "related_observation_ids_json": row.related_observation_ids_json or "[]",
+            "raise_condition": row.ask_after or "",
+        })
+
+    conn.execute(text("DROP TABLE pending_clarifications"))
 
 
 def _rename_column(conn, table: str, old: str, new: str) -> None:

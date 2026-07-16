@@ -8,14 +8,12 @@ from app.routes.audit import router as audit_router
 from app.routes.entity import router as entity_router
 from app.routes.observation import router as observation_router
 from app.routes.pattern import router as pattern_router
-from app.routes.pending_clarification import router as clarification_router
 from app.routes.agent_config import router as agent_config_router
 from app.routes.briefing import router as briefing_router
 from app.models import memory, audit, agent_config
 from app.models import entity
 from app.models import observation
 from app.models import pattern
-from app.models import pending_clarification
 from app.services.qdrant_store import ensure_qdrant_collection, ensure_observation_collection
 from app.services.embeddings import get_embedding_model, embed_text
 
@@ -57,8 +55,6 @@ app.include_router(entity_router, dependencies=_auth)
 app.include_router(observation_router, dependencies=_auth)
 
 app.include_router(pattern_router, dependencies=_auth)
-
-app.include_router(clarification_router, dependencies=_auth)
 
 app.include_router(agent_config_router, dependencies=_auth)
 

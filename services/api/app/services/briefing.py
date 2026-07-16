@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from app.models.observation import Observation
 from app.models.entity import Entity, EntityEvent
-from app.models.pending_clarification import PendingClarification
 from app.models.memory import Memory
 
 RECENT_WINDOW_DAYS = 7
@@ -66,15 +65,18 @@ def _active_streaks(db, agent_id: str) -> list[dict]:
 
 
 def _pending_clarifications(db, agent_id: str) -> list[dict]:
+    # clarifications live on Observation now (needs_clarification=True); there's
+    # no dedicated importance column post-merge, so hypothesis_confidence -
+    # already "how sure are we this needs surfacing" - stands in for it.
     rows = db.execute(
-        select(PendingClarification)
-        .where(PendingClarification.agent_id == agent_id, PendingClarification.status == "pending")
-        .order_by(PendingClarification.importance.desc())
+        select(Observation)
+        .where(Observation.agent_id == agent_id, Observation.needs_clarification == True, Observation.status == "unconfirmed")  # noqa: E712
+        .order_by(Observation.hypothesis_confidence.desc(), Observation.observed_at.desc())
         .limit(2)
     ).scalars().all()
 
     return [
-        {"id": row.id, "what": row.what_happened, "trigger_condition": row.ask_after}
+        {"id": row.id, "what": row.description, "trigger_condition": row.raise_condition}
         for row in rows
     ]
 
@@ -149,7 +151,7 @@ def _watch_flags(db, agent_id: str) -> list[str]:
     cutoff = _now() - timedelta(days=WATCH_FLAG_WINDOW_DAYS)
     rows = db.execute(
         select(Memory)
-        .where(Memory.agent_id == agent_id, Memory.memory_type == "harmful_pattern", Memory.created_at >= cutoff)
+        .where(Memory.agent_id == agent_id, Memory.memory_type == "watch", Memory.created_at >= cutoff)
         .order_by(Memory.created_at.desc())
         .limit(5)
     ).scalars().all()

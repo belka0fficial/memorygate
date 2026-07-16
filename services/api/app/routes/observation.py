@@ -40,6 +40,8 @@ def _obs_to_dict(row: Observation) -> dict:
         "trigger_context": row.trigger_context,
         "archived_at": row.archived_at.isoformat() if row.archived_at else None,
         "archive_reason": row.archive_reason,
+        "raise_condition": row.raise_condition,
+        "needs_clarification": row.needs_clarification,
         "entity_ids": json.loads(row.entity_ids_json),
         "related_observation_ids": json.loads(row.related_observation_ids_json),
     }
@@ -79,6 +81,8 @@ def create_observation(payload: ObservationCreateRequest, header_agent_id: str =
             confirmed_by=payload.confirmed_by,
             trigger_context=payload.trigger_context,
             max_exposures=payload.max_exposures,
+            raise_condition=payload.raise_condition,
+            needs_clarification=payload.needs_clarification,
             entity_ids_json=json.dumps(payload.entity_ids),
             related_observation_ids_json=json.dumps(payload.related_observation_ids),
         )
@@ -110,6 +114,8 @@ def search_observations(payload: ObservationSearchRequest, header_agent_id: str 
             filters.append(Observation.signal_type == payload.signal_type)
         if payload.status:
             filters.append(Observation.status == payload.status)
+        if payload.needs_clarification is not None:
+            filters.append(Observation.needs_clarification == payload.needs_clarification)
         if filters:
             stmt = stmt.where(and_(*filters))
 
@@ -140,14 +146,13 @@ def search_observations(payload: ObservationSearchRequest, header_agent_id: str 
         db.close()
 
 @router.get("/active")
-def list_active_observations(agent_id: str = Depends(get_agent_id)):
+def list_active_observations(agent_id: str = Depends(get_agent_id), needs_clarification: bool | None = None):
     db = SessionLocal()
     try:
-        rows = db.execute(
-            select(Observation)
-            .where(Observation.agent_id == agent_id, Observation.status != "archived")
-            .order_by(Observation.observed_at.desc())
-        ).scalars().all()
+        stmt = select(Observation).where(Observation.agent_id == agent_id, Observation.status != "archived")
+        if needs_clarification is not None:
+            stmt = stmt.where(Observation.needs_clarification == needs_clarification)
+        rows = db.execute(stmt.order_by(Observation.observed_at.desc())).scalars().all()
         return {"results": [_obs_to_dict(row) for row in rows]}
     finally:
         db.close()
@@ -199,6 +204,10 @@ def update_observation(observation_id: str, payload: ObservationUpdateRequest, a
             row.confirmed_by = payload.confirmed_by
         if payload.trigger_context is not None:
             row.trigger_context = payload.trigger_context
+        if payload.raise_condition is not None:
+            row.raise_condition = payload.raise_condition
+        if payload.needs_clarification is not None:
+            row.needs_clarification = payload.needs_clarification
         if payload.related_observation_ids is not None:
             row.related_observation_ids_json = json.dumps(payload.related_observation_ids)
 
