@@ -7,6 +7,7 @@ class Pattern(Base):
     __tablename__ = "patterns"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id: Mapped[str] = mapped_column(String, default="default", index=True)
     pattern_name: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     observation_ids_json: Mapped[str] = mapped_column(Text, default="[]")

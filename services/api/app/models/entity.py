@@ -7,13 +7,14 @@ class Entity(Base):
     __tablename__ = "entities"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id: Mapped[str] = mapped_column(String, default="default", index=True)
     entity_type: Mapped[str] = mapped_column(String, index=True)
     name: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     tags_json: Mapped[str] = mapped_column(Text, default="[]")
     attributes_json: Mapped[str] = mapped_column(Text, default="{}")
-    conker_notes: Mapped[str] = mapped_column(Text, default="")
-    conker_summary: Mapped[str] = mapped_column(Text, default="")
+    agent_notes: Mapped[str] = mapped_column(Text, default="")
+    agent_summary: Mapped[str] = mapped_column(Text, default="")
     importance_level: Mapped[str] = mapped_column(String, default="normal")
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

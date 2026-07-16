@@ -1,8 +1,9 @@
 import json
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from app.core.db import SessionLocal
+from app.core.agent import get_agent_id, resolve_agent_id
 from app.models.pattern import Pattern
 from app.models.observation import Observation
 from app.schemas.pattern import (
@@ -10,13 +11,17 @@ from app.schemas.pattern import (
     PatternSearchRequest,
     PatternUpdateRequest,
     PatternPromoteRequest,
+    PatternConfirmRequest,
+    PatternContradictRequest,
 )
+from app.services.pattern_promotion import maybe_promote, DEPRECATE_AT_CONTRADICTIONS
 
 router = APIRouter(prefix="/pattern", tags=["pattern"])
 
 def _pattern_to_dict(row: Pattern) -> dict:
     return {
         "id": row.id,
+        "agent_id": row.agent_id,
         "pattern_name": row.pattern_name,
         "description": row.description,
         "observation_ids": json.loads(row.observation_ids_json),
@@ -35,11 +40,19 @@ def _pattern_to_dict(row: Pattern) -> dict:
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
+def _get_owned_pattern(db, pattern_id: str, agent_id: str) -> Pattern:
+    row = db.get(Pattern, pattern_id)
+    if not row or row.agent_id != agent_id:
+        raise HTTPException(404, "Pattern not found")
+    return row
+
 @router.post("/create")
-def create_pattern(payload: PatternCreateRequest):
+def create_pattern(payload: PatternCreateRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
         row = Pattern(
+            agent_id=agent_id,
             pattern_name=payload.pattern_name,
             description=payload.description,
             observation_ids_json=json.dumps(payload.observation_ids),
@@ -62,10 +75,13 @@ def create_pattern(payload: PatternCreateRequest):
         db.close()
 
 @router.post("/search")
-def search_patterns(payload: PatternSearchRequest):
+def search_patterns(payload: PatternSearchRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
-        rows = db.execute(select(Pattern).order_by(Pattern.updated_at.desc())).scalars().all()
+        rows = db.execute(
+            select(Pattern).where(Pattern.agent_id == agent_id).order_by(Pattern.updated_at.desc())
+        ).scalars().all()
         results = []
 
         for row in rows:
@@ -93,24 +109,42 @@ def search_patterns(payload: PatternSearchRequest):
     finally:
         db.close()
 
-@router.get("/{pattern_id}")
-def get_pattern(pattern_id: str):
+@router.get("/active/{agent_id}")
+def list_active_patterns(agent_id: str):
     db = SessionLocal()
     try:
-        row = db.get(Pattern, pattern_id)
-        if not row:
-            raise HTTPException(404, "Pattern not found")
+        rows = db.execute(
+            select(Pattern).where(Pattern.agent_id == agent_id, Pattern.status == "active").order_by(Pattern.updated_at.desc())
+        ).scalars().all()
+        return {"results": [_pattern_to_dict(row) for row in rows]}
+    finally:
+        db.close()
+
+@router.get("/candidates/{agent_id}")
+def list_candidate_patterns(agent_id: str):
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(Pattern).where(Pattern.agent_id == agent_id, Pattern.status == "candidate").order_by(Pattern.updated_at.desc())
+        ).scalars().all()
+        return {"results": [_pattern_to_dict(row) for row in rows]}
+    finally:
+        db.close()
+
+@router.get("/{pattern_id}")
+def get_pattern(pattern_id: str, agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        row = _get_owned_pattern(db, pattern_id, agent_id)
         return _pattern_to_dict(row)
     finally:
         db.close()
 
 @router.post("/update/{pattern_id}")
-def update_pattern(pattern_id: str, payload: PatternUpdateRequest):
+def update_pattern(pattern_id: str, payload: PatternUpdateRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        row = db.get(Pattern, pattern_id)
-        if not row:
-            raise HTTPException(404, "Pattern not found")
+        row = _get_owned_pattern(db, pattern_id, agent_id)
 
         if payload.description is not None:
             row.description = payload.description
@@ -143,11 +177,42 @@ def update_pattern(pattern_id: str, payload: PatternUpdateRequest):
     finally:
         db.close()
 
-@router.post("/promote")
-def promote_pattern(payload: PatternPromoteRequest):
+@router.post("/{pattern_id}/confirm")
+def confirm_pattern(pattern_id: str, payload: PatternConfirmRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        obs_rows = db.execute(select(Observation).order_by(Observation.observed_at.desc())).scalars().all()
+        row = _get_owned_pattern(db, pattern_id, agent_id)
+        row.confirmation_count += 1
+        row.last_confirmed_at = datetime.now(timezone.utc)
+        maybe_promote(row)
+        db.commit()
+        db.refresh(row)
+        return {"status": "ok", "pattern": _pattern_to_dict(row)}
+    finally:
+        db.close()
+
+@router.post("/{pattern_id}/contradict")
+def contradict_pattern(pattern_id: str, payload: PatternContradictRequest, agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        row = _get_owned_pattern(db, pattern_id, agent_id)
+        row.contradiction_count += 1
+        if row.status == "active" and row.contradiction_count >= DEPRECATE_AT_CONTRADICTIONS:
+            row.status = "deprecated"
+        db.commit()
+        db.refresh(row)
+        return {"status": "ok", "pattern": _pattern_to_dict(row)}
+    finally:
+        db.close()
+
+@router.post("/promote")
+def promote_pattern(payload: PatternPromoteRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
+    db = SessionLocal()
+    try:
+        obs_rows = db.execute(
+            select(Observation).where(Observation.agent_id == agent_id).order_by(Observation.observed_at.desc())
+        ).scalars().all()
         matched = []
 
         for row in obs_rows:
@@ -185,6 +250,7 @@ def promote_pattern(payload: PatternPromoteRequest):
                     applies_to_entity_ids.append(eid)
 
         pattern = Pattern(
+            agent_id=agent_id,
             pattern_name=payload.pattern_name,
             description=f"Promoted from {len(matched)} observations.",
             observation_ids_json=json.dumps(observation_ids),

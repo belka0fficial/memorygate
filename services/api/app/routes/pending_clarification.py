@@ -1,7 +1,8 @@
 import json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from app.core.db import SessionLocal
+from app.core.agent import get_agent_id, resolve_agent_id
 from app.models.pending_clarification import PendingClarification
 from app.schemas.pending_clarification import (
     PendingClarificationCreateRequest,
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/clarification", tags=["clarification"])
 def _pc_to_dict(row: PendingClarification) -> dict:
     return {
         "id": row.id,
+        "agent_id": row.agent_id,
         "session_id": row.session_id,
         "observed_at": row.observed_at.isoformat() if row.observed_at else None,
         "what_happened": row.what_happened,
@@ -21,21 +23,25 @@ def _pc_to_dict(row: PendingClarification) -> dict:
         "status": row.status,
         "resolved_answer": row.resolved_answer,
         "ask_after": row.ask_after,
+        "importance": row.importance,
         "entity_ids": json.loads(row.entity_ids_json),
         "related_observation_ids": json.loads(row.related_observation_ids_json),
     }
 
 @router.post("/create")
-def create_pending_clarification(payload: PendingClarificationCreateRequest):
+def create_pending_clarification(payload: PendingClarificationCreateRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
         row = PendingClarification(
+            agent_id=agent_id,
             session_id=payload.session_id,
             what_happened=payload.what_happened,
             hypotheses_json=json.dumps(payload.hypotheses),
             status=payload.status,
             resolved_answer=payload.resolved_answer,
             ask_after=payload.ask_after,
+            importance=payload.importance,
             entity_ids_json=json.dumps(payload.entity_ids),
             related_observation_ids_json=json.dumps(payload.related_observation_ids),
         )
@@ -47,11 +53,14 @@ def create_pending_clarification(payload: PendingClarificationCreateRequest):
         db.close()
 
 @router.post("/search")
-def search_pending_clarifications(payload: PendingClarificationSearchRequest):
+def search_pending_clarifications(payload: PendingClarificationSearchRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
         rows = db.execute(
-            select(PendingClarification).order_by(PendingClarification.observed_at.desc())
+            select(PendingClarification)
+            .where(PendingClarification.agent_id == agent_id)
+            .order_by(PendingClarification.observed_at.desc())
         ).scalars().all()
 
         results = []
@@ -82,22 +91,22 @@ def search_pending_clarifications(payload: PendingClarificationSearchRequest):
         db.close()
 
 @router.get("/{clarification_id}")
-def get_pending_clarification(clarification_id: str):
+def get_pending_clarification(clarification_id: str, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
         row = db.get(PendingClarification, clarification_id)
-        if not row:
+        if not row or row.agent_id != agent_id:
             raise HTTPException(404, "Pending clarification not found")
         return _pc_to_dict(row)
     finally:
         db.close()
 
 @router.post("/update")
-def update_pending_clarification(payload: PendingClarificationUpdateRequest):
+def update_pending_clarification(payload: PendingClarificationUpdateRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
         row = db.get(PendingClarification, payload.clarification_id)
-        if not row:
+        if not row or row.agent_id != agent_id:
             raise HTTPException(404, "Pending clarification not found")
 
         if payload.status is not None:
@@ -106,6 +115,8 @@ def update_pending_clarification(payload: PendingClarificationUpdateRequest):
             row.resolved_answer = payload.resolved_answer
         if payload.ask_after is not None:
             row.ask_after = payload.ask_after
+        if payload.importance is not None:
+            row.importance = payload.importance
         if payload.hypotheses is not None:
             row.hypotheses_json = json.dumps(payload.hypotheses)
         if payload.related_observation_ids is not None:

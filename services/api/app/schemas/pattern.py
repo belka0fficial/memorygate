@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Any
 
 class PatternCreateRequest(BaseModel):
+    agent_id: str | None = None
     pattern_name: str
     description: str = ""
     observation_ids: list[str] = Field(default_factory=list)
@@ -16,6 +17,7 @@ class PatternCreateRequest(BaseModel):
     status: str = "candidate"
 
 class PatternSearchRequest(BaseModel):
+    agent_id: str | None = None
     query: str = ""
     status: str | None = None
     entity_id: str | None = None
@@ -34,6 +36,7 @@ class PatternUpdateRequest(BaseModel):
     status: str | None = None
 
 class PatternPromoteRequest(BaseModel):
+    agent_id: str | None = None
     pattern_name: str
     query: str = ""
     entity_id: str | None = None
@@ -41,3 +44,9 @@ class PatternPromoteRequest(BaseModel):
     confidence: float = 0.75
     interpretation: str = ""
     recommended_action: str = ""
+
+class PatternConfirmRequest(BaseModel):
+    note: str = ""
+
+class PatternContradictRequest(BaseModel):
+    note: str = ""

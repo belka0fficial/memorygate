@@ -2,26 +2,29 @@ from pydantic import BaseModel, Field
 from typing import Any
 
 class EntityCreateRequest(BaseModel):
+    agent_id: str | None = None
     entity_type: str
     name: str
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
-    conker_notes: str = ""
-    conker_summary: str = ""
+    agent_notes: str = ""
+    agent_summary: str = ""
     importance_level: str = "normal"
 
 class EntityUpdateRequest(BaseModel):
+    name: str | None = None
     description: str | None = None
     tags: list[str] | None = None
     attributes: dict[str, Any] | None = None
-    conker_notes: str | None = None
-    conker_summary: str | None = None
+    agent_notes: str | None = None
+    agent_summary: str | None = None
     importance_level: str | None = None
     change_reason: str = "manual update"
     triggered_by: str = "system"
 
 class EntitySearchRequest(BaseModel):
+    agent_id: str | None = None
     query: str
     entity_type: str | None = None
 
@@ -43,11 +46,12 @@ class EntityEventCreateRequest(BaseModel):
 
 class EntityUpdateByIdRequest(BaseModel):
     entity_id: str
+    name: str | None = None
     description: str | None = None
     tags: list[str] | None = None
     attributes: dict[str, Any] | None = None
-    conker_notes: str | None = None
-    conker_summary: str | None = None
+    agent_notes: str | None = None
+    agent_summary: str | None = None
     importance_level: str | None = None
     change_reason: str = "manual update"
     triggered_by: str = "system"

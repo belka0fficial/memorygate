@@ -1,8 +1,10 @@
 def memory_rank_bonus(memory_type: str, identity_weight: str, confidence: str) -> float:
     type_bonus = {
         "stable_preference": 0.45,
+        "harmful_pattern": 0.40,
         "identity_trait": 0.35,
         "humor_style": 0.20,
+        "support_context": 0.15,
         "task_context": 0.10,
         "temporary_phase": -0.10,
     }.get(memory_type, 0.0)

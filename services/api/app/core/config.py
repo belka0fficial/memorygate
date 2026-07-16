@@ -10,3 +10,5 @@ QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "memories")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 EMBED_DIMENSION = int(os.getenv("EMBED_DIMENSION", "384"))
+
+MEMORYGATE_ADMIN_KEY = os.getenv("MEMORYGATE_ADMIN_KEY", "")

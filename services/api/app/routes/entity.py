@@ -1,7 +1,8 @@
 import json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select, or_
 from app.core.db import SessionLocal
+from app.core.agent import get_agent_id, resolve_agent_id
 from app.models.entity import Entity, EntityEdge, EntityEvent, EntityHistory
 from app.schemas.entity import (
     EntityCreateRequest,
@@ -17,30 +18,50 @@ router = APIRouter(prefix="/entity", tags=["entity"])
 def _entity_to_dict(row: Entity) -> dict:
     return {
         "id": row.id,
+        "agent_id": row.agent_id,
         "entity_type": row.entity_type,
         "name": row.name,
         "description": row.description,
         "tags": json.loads(row.tags_json),
         "attributes": json.loads(row.attributes_json),
-        "conker_notes": row.conker_notes,
-        "conker_summary": row.conker_summary,
+        "agent_notes": row.agent_notes,
+        "agent_summary": row.agent_summary,
         "importance_level": row.importance_level,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
+def _get_owned_entity(db, entity_id: str, agent_id: str) -> Entity:
+    row = db.get(Entity, entity_id)
+    if not row or row.agent_id != agent_id:
+        raise HTTPException(404, "Entity not found")
+    return row
+
+@router.get("")
+def list_entities(agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(Entity).where(Entity.agent_id == agent_id).order_by(Entity.updated_at.desc()).limit(100)
+        ).scalars().all()
+        return [_entity_to_dict(row) for row in rows]
+    finally:
+        db.close()
+
 @router.post("/create")
-def create_entity(payload: EntityCreateRequest):
+def create_entity(payload: EntityCreateRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
         entity = Entity(
+            agent_id=agent_id,
             entity_type=payload.entity_type,
             name=payload.name,
             description=payload.description,
             tags_json=json.dumps(payload.tags),
             attributes_json=json.dumps(payload.attributes),
-            conker_notes=payload.conker_notes,
-            conker_summary=payload.conker_summary,
+            agent_notes=payload.agent_notes,
+            agent_summary=payload.agent_summary,
             importance_level=payload.importance_level,
         )
         db.add(entity)
@@ -61,27 +82,38 @@ def create_entity(payload: EntityCreateRequest):
     finally:
         db.close()
 
-@router.get("/{entity_id}")
-def get_entity(entity_id: str):
+@router.delete("/{entity_id}")
+def delete_entity(entity_id: str, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        row = db.get(Entity, entity_id)
-        if not row:
-            raise HTTPException(404, "Entity not found")
+        row = _get_owned_entity(db, entity_id, agent_id)
+        db.delete(row)
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
+
+@router.get("/{entity_id}")
+def get_entity(entity_id: str, agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        row = _get_owned_entity(db, entity_id, agent_id)
         return _entity_to_dict(row)
     finally:
         db.close()
 
 @router.post("/search")
-def search_entities(payload: EntitySearchRequest):
+def search_entities(payload: EntitySearchRequest, header_agent_id: str = Depends(get_agent_id)):
+    agent_id = resolve_agent_id(header_agent_id, payload.agent_id)
     db = SessionLocal()
     try:
         stmt = select(Entity).where(
+            Entity.agent_id == agent_id,
             or_(
                 Entity.name.ilike(f"%{payload.query}%"),
                 Entity.description.ilike(f"%{payload.query}%"),
-                Entity.conker_summary.ilike(f"%{payload.query}%"),
-                Entity.conker_notes.ilike(f"%{payload.query}%"),
+                Entity.agent_summary.ilike(f"%{payload.query}%"),
+                Entity.agent_notes.ilike(f"%{payload.query}%"),
             )
         )
         if payload.entity_type:
@@ -93,25 +125,25 @@ def search_entities(payload: EntitySearchRequest):
         db.close()
 
 @router.patch("/{entity_id}")
-def update_entity(entity_id: str, payload: EntityUpdateRequest):
+def update_entity(entity_id: str, payload: EntityUpdateRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        row = db.get(Entity, entity_id)
-        if not row:
-            raise HTTPException(404, "Entity not found")
+        row = _get_owned_entity(db, entity_id, agent_id)
 
         before = _entity_to_dict(row)
 
+        if payload.name is not None:
+            row.name = payload.name
         if payload.description is not None:
             row.description = payload.description
         if payload.tags is not None:
             row.tags_json = json.dumps(payload.tags)
         if payload.attributes is not None:
             row.attributes_json = json.dumps(payload.attributes)
-        if payload.conker_notes is not None:
-            row.conker_notes = payload.conker_notes
-        if payload.conker_summary is not None:
-            row.conker_summary = payload.conker_summary
+        if payload.agent_notes is not None:
+            row.agent_notes = payload.agent_notes
+        if payload.agent_summary is not None:
+            row.agent_summary = payload.agent_summary
         if payload.importance_level is not None:
             row.importance_level = payload.importance_level
 
@@ -135,13 +167,11 @@ def update_entity(entity_id: str, payload: EntityUpdateRequest):
         db.close()
 
 @router.post("/link")
-def link_entities(payload: EntityLinkRequest):
+def link_entities(payload: EntityLinkRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        if not db.get(Entity, payload.from_entity_id):
-            raise HTTPException(404, "from_entity not found")
-        if not db.get(Entity, payload.to_entity_id):
-            raise HTTPException(404, "to_entity not found")
+        _get_owned_entity(db, payload.from_entity_id, agent_id)
+        _get_owned_entity(db, payload.to_entity_id, agent_id)
 
         edge = EntityEdge(
             from_entity_id=payload.from_entity_id,
@@ -172,9 +202,11 @@ def link_entities(payload: EntityLinkRequest):
         db.close()
 
 @router.get("/{entity_id}/edges")
-def get_entity_edges(entity_id: str):
+def get_entity_edges(entity_id: str, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
+        _get_owned_entity(db, entity_id, agent_id)
+
         rows = db.execute(
             select(EntityEdge).where(
                 or_(
@@ -203,11 +235,10 @@ def get_entity_edges(entity_id: str):
         db.close()
 
 @router.post("/event")
-def create_entity_event(payload: EntityEventCreateRequest):
+def create_entity_event(payload: EntityEventCreateRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        if not db.get(Entity, payload.entity_id):
-            raise HTTPException(404, "Entity not found")
+        _get_owned_entity(db, payload.entity_id, agent_id)
 
         event = EntityEvent(
             entity_id=payload.entity_id,
@@ -235,9 +266,11 @@ def create_entity_event(payload: EntityEventCreateRequest):
         db.close()
 
 @router.get("/{entity_id}/events")
-def get_entity_events(entity_id: str):
+def get_entity_events(entity_id: str, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
+        _get_owned_entity(db, entity_id, agent_id)
+
         rows = db.execute(
             select(EntityEvent).where(EntityEvent.entity_id == entity_id).order_by(EntityEvent.created_at.desc())
         ).scalars().all()
@@ -259,9 +292,11 @@ def get_entity_events(entity_id: str):
         db.close()
 
 @router.get("/{entity_id}/history")
-def get_entity_history(entity_id: str):
+def get_entity_history(entity_id: str, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
+        _get_owned_entity(db, entity_id, agent_id)
+
         rows = db.execute(
             select(EntityHistory).where(EntityHistory.entity_id == entity_id).order_by(EntityHistory.snapshot_at.desc())
         ).scalars().all()
@@ -286,25 +321,25 @@ def get_entity_history(entity_id: str):
 
 
 @router.post("/update")
-def update_entity_by_id(payload: EntityUpdateByIdRequest):
+def update_entity_by_id(payload: EntityUpdateByIdRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        row = db.get(Entity, payload.entity_id)
-        if not row:
-            raise HTTPException(404, "Entity not found")
+        row = _get_owned_entity(db, payload.entity_id, agent_id)
 
         before = _entity_to_dict(row)
 
+        if payload.name is not None:
+            row.name = payload.name
         if payload.description is not None:
             row.description = payload.description
         if payload.tags is not None:
             row.tags_json = json.dumps(payload.tags)
         if payload.attributes is not None:
             row.attributes_json = json.dumps(payload.attributes)
-        if payload.conker_notes is not None:
-            row.conker_notes = payload.conker_notes
-        if payload.conker_summary is not None:
-            row.conker_summary = payload.conker_summary
+        if payload.agent_notes is not None:
+            row.agent_notes = payload.agent_notes
+        if payload.agent_summary is not None:
+            row.agent_summary = payload.agent_summary
         if payload.importance_level is not None:
             row.importance_level = payload.importance_level
 
