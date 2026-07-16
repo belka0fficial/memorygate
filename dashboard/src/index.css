@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0a0a;
+  --color-surface: #111111;
+  --color-surface-2: #161616;
+  --color-border: #1a1a1a;
+  --color-text: #ededed;
+  --color-muted: #888888;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2f6fd6;
+
+  /* agent color coding, used whenever "All" combines agents */
+  --color-agent-conker: #3b82f6;
+  --color-agent-emolga: #10b981;
+
+  /* memory_type badge colors */
+  --color-mem-stable: #3b82f6;
+  --color-mem-identity: #8b5cf6;
+  --color-mem-humor: #f59e0b;
+  --color-mem-temporary: #6b7280;
+  --color-mem-task: #475569;
+  --color-mem-harmful: #ef4444;
+  --color-mem-support: #10b981;
+
+  /* entity_type node/badge colors */
+  --color-entity-human: #3b82f6;
+  --color-entity-project: #10b981;
+  --color-entity-organization: #f59e0b;
+  --color-entity-place: #8b5cf6;
+  --color-entity-concept: #64748b;
+  --color-entity-habit: #ef4444;
+  --color-entity-object: #6b7280;
+
+  /* generic status colors reused across observations / patterns / clarifications */
+  --color-status-positive: #10b981;
+  --color-status-pending: #f59e0b;
+  --color-status-negative: #ef4444;
+  --color-status-neutral: #6b7280;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+input,
+textarea,
+button,
+select {
+  font-family: inherit;
+}
+
+/* thin, quiet scrollbars for the dark UI */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
