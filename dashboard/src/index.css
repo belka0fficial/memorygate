@@ -15,13 +15,10 @@
   --color-agent-emolga: #10b981;
 
   /* memory_type badge colors */
-  --color-mem-stable: #3b82f6;
-  --color-mem-identity: #8b5cf6;
-  --color-mem-humor: #f59e0b;
-  --color-mem-temporary: #6b7280;
-  --color-mem-task: #475569;
-  --color-mem-harmful: #ef4444;
-  --color-mem-support: #10b981;
+  --color-mem-fact: #3b82f6;
+  --color-mem-phase: #f59e0b;
+  --color-mem-context: #10b981;
+  --color-mem-watch: #ef4444;
 
   /* entity_type node/badge colors */
   --color-entity-human: #3b82f6;

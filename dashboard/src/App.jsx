@@ -5,12 +5,13 @@ import { AgentProvider } from './context/AgentContext';
 import AuthScreen from './screens/AuthScreen';
 import Layout from './components/Layout';
 import OverviewScreen from './screens/OverviewScreen';
+import BeliefsScreen from './screens/BeliefsScreen';
 import MemoriesScreen from './screens/MemoriesScreen';
 import EntitiesScreen from './screens/EntitiesScreen';
 import ObservationsScreen from './screens/ObservationsScreen';
 import PatternsScreen from './screens/PatternsScreen';
-import ClarificationsScreen from './screens/ClarificationsScreen';
 import BriefingScreen from './screens/BriefingScreen';
+import TranscriptsScreen from './screens/TranscriptsScreen';
 
 function Gate() {
   const { authed, checking } = useAuth();
@@ -32,12 +33,13 @@ function Gate() {
           <Route element={<Layout />}>
             <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewScreen />} />
+            <Route path="/beliefs" element={<BeliefsScreen />} />
             <Route path="/memories" element={<MemoriesScreen />} />
             <Route path="/entities" element={<EntitiesScreen />} />
             <Route path="/observations" element={<ObservationsScreen />} />
             <Route path="/patterns" element={<PatternsScreen />} />
-            <Route path="/clarifications" element={<ClarificationsScreen />} />
             <Route path="/briefing" element={<BriefingScreen />} />
+            <Route path="/transcripts" element={<TranscriptsScreen />} />
             <Route path="*" element={<Navigate to="/overview" replace />} />
           </Route>
         </Routes>

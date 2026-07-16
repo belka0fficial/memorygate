@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Loader2, Plus } from 'lucide-react';
+import { Search, Loader2, Plus, ShieldOff, CalendarClock } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAgent } from '../context/AgentContext';
 import { scopeAgentIds } from '../lib/agentScope';
 import { timeAgo } from '../lib/timeAgo';
-import MemoryTypeBadge from '../components/MemoryTypeBadge';
+import MemoryTypeBadge, { MEMORY_TYPES } from '../components/MemoryTypeBadge';
 import SidePanel from '../components/SidePanel';
 import Modal from '../components/Modal';
 import Button from '../components/Button';
-import { TextArea } from '../components/TextField';
+import TextField, { TextArea } from '../components/TextField';
 import AgentDot from '../components/AgentDot';
 
-const TYPES = ['stable_preference', 'identity_trait', 'humor_style', 'temporary_phase', 'task_context', 'harmful_pattern', 'support_context'];
 const CONFIDENCE_LEVELS = ['high', 'medium', 'low'];
+
+function isoToDateInput(iso) {
+  return iso ? iso.slice(0, 10) : '';
+}
 
 export default function MemoriesScreen() {
   const { agentId, agents, isAll } = useAgent();
@@ -117,7 +120,7 @@ export default function MemoriesScreen() {
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
           className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus-visible:border-accent">
           <option value="all">All types</option>
-          {TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+          {MEMORY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
 
         <select value={confidenceFilter} onChange={(e) => setConfidenceFilter(e.target.value)}
@@ -156,6 +159,9 @@ export default function MemoriesScreen() {
                 <div className="flex items-center gap-1.5">
                   <MemoryTypeBadge type={m.memory_type} />
                   <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">{m.confidence}</span>
+                  {m.do_not_generalize && (
+                    <span title="Do not generalize from this memory"><ShieldOff size={13} className="text-amber-400" /></span>
+                  )}
                 </div>
                 {wasSearch && m.similarity != null && (
                   <span className="text-[11px] text-muted">{Math.round(Math.max(0, m.similarity) * 100)}%</span>
@@ -166,6 +172,11 @@ export default function MemoriesScreen() {
                 {isAll && <AgentDot agentId={m.agent_id} />}
                 <span>{m.source_type}</span>
                 <span>· {timeAgo(m.created_at)}</span>
+                {m.memory_type === 'phase' && m.review_by && (
+                  <span className="ml-auto flex items-center gap-1 text-mem-phase">
+                    <CalendarClock size={11} /> review {isoToDateInput(m.review_by)}
+                  </span>
+                )}
               </div>
             </button>
           ))}
@@ -187,12 +198,14 @@ function MemoryDetailPanel({ memory, onClose, onDelete, onSave }) {
   const [text, setText] = useState(memory.text);
   const [memoryType, setMemoryType] = useState(memory.memory_type);
   const [confidence, setConfidence] = useState(memory.confidence);
-  const [identityWeight, setIdentityWeight] = useState(memory.identity_weight);
+  const [doNotGeneralize, setDoNotGeneralize] = useState(memory.do_not_generalize);
+  const [reviewBy, setReviewBy] = useState(isoToDateInput(memory.review_by));
   const [tags, setTags] = useState(memory.tags.join(', '));
   const [saving, setSaving] = useState(false);
 
   const dirty = text !== memory.text || memoryType !== memory.memory_type || confidence !== memory.confidence
-    || identityWeight !== memory.identity_weight || tags !== memory.tags.join(', ');
+    || doNotGeneralize !== memory.do_not_generalize || reviewBy !== isoToDateInput(memory.review_by)
+    || tags !== memory.tags.join(', ');
 
   const save = async () => {
     setSaving(true);
@@ -201,7 +214,8 @@ function MemoryDetailPanel({ memory, onClose, onDelete, onSave }) {
         text,
         memory_type: memoryType,
         confidence,
-        identity_weight: identityWeight,
+        do_not_generalize: doNotGeneralize,
+        review_by: reviewBy ? new Date(reviewBy).toISOString() : null,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       });
     } finally {
@@ -218,7 +232,7 @@ function MemoryDetailPanel({ memory, onClose, onDelete, onSave }) {
           <span className="mb-1.5 block text-xs font-medium text-muted">Memory type</span>
           <select value={memoryType} onChange={(e) => setMemoryType(e.target.value)}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent">
-            {TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+            {MEMORY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
 
@@ -230,13 +244,14 @@ function MemoryDetailPanel({ memory, onClose, onDelete, onSave }) {
           </select>
         </label>
 
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-muted">Identity weight</span>
-          <select value={identityWeight} onChange={(e) => setIdentityWeight(e.target.value)}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent">
-            {['high', 'medium', 'low'].map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input type="checkbox" checked={doNotGeneralize} onChange={(e) => setDoNotGeneralize(e.target.checked)} className="h-4 w-4 accent-accent" />
+          Do not generalize from this memory
         </label>
+
+        {memoryType === 'phase' && (
+          <TextField label="Review by" type="date" value={reviewBy} onChange={(e) => setReviewBy(e.target.value)} />
+        )}
 
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-muted">Tags (comma separated)</span>
@@ -275,6 +290,7 @@ function AddMemoryModal({ onClose, onSave, defaultAgent }) {
   const [text, setText] = useState('');
   const [memoryType, setMemoryType] = useState('');
   const [confidence, setConfidence] = useState('');
+  const [doNotGeneralize, setDoNotGeneralize] = useState(false);
   const [tags, setTags] = useState('');
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
@@ -289,6 +305,7 @@ function AddMemoryModal({ onClose, onSave, defaultAgent }) {
         text,
         memory_type: memoryType || undefined,
         confidence: confidence || undefined,
+        do_not_generalize: doNotGeneralize,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       });
       if (res.status !== 'ok') setResult(res);
@@ -307,7 +324,7 @@ function AddMemoryModal({ onClose, onSave, defaultAgent }) {
           <select value={memoryType} onChange={(e) => setMemoryType(e.target.value)}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent">
             <option value="">Auto</option>
-            {TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+            {MEMORY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
 
@@ -318,6 +335,11 @@ function AddMemoryModal({ onClose, onSave, defaultAgent }) {
             <option value="">Auto</option>
             {CONFIDENCE_LEVELS.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input type="checkbox" checked={doNotGeneralize} onChange={(e) => setDoNotGeneralize(e.target.checked)} className="h-4 w-4 accent-accent" />
+          Do not generalize from this memory
         </label>
 
         <label className="block">

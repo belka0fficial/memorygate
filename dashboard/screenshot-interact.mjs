@@ -49,6 +49,12 @@ for (const action of actions) {
     const selector = action.slice('click:'.length);
     await page.click(selector);
     await new Promise((r) => setTimeout(r, 500));
+  } else if (action.startsWith('type:')) {
+    const [selector, ...rest] = action.slice('type:'.length).split('|');
+    const value = rest.join('|');
+    const input = await page.$(selector);
+    if (input) await input.type(value, { delay: 20 });
+    await new Promise((r) => setTimeout(r, 400));
   } else if (action.startsWith('wait:')) {
     await new Promise((r) => setTimeout(r, Number(action.slice('wait:'.length))));
   } else if (action.startsWith('clickText:')) {

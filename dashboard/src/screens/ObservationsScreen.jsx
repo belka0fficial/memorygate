@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Check, Ban, Archive, Zap } from 'lucide-react';
+import { Plus, Check, Ban, Archive, Zap, HelpCircle } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAgent } from '../context/AgentContext';
 import { scopeAgentIds } from '../lib/agentScope';
@@ -36,6 +36,7 @@ export default function ObservationsScreen() {
   const [observations, setObservations] = useState(null);
   const [tab, setTab] = useState('unconfirmed');
   const [signalFilter, setSignalFilter] = useState('all');
+  const [needsClarificationOnly, setNeedsClarificationOnly] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -63,9 +64,10 @@ export default function ObservationsScreen() {
     return observations.filter((o) => {
       if (o.status !== tab) return false;
       if (signalFilter !== 'all' && o.signal_type !== signalFilter) return false;
+      if (needsClarificationOnly && !o.needs_clarification) return false;
       return true;
     });
-  }, [observations, tab, signalFilter]);
+  }, [observations, tab, signalFilter, needsClarificationOnly]);
 
   const act = async (obs, action, extra) => {
     setBusyId(obs.id);
@@ -115,6 +117,10 @@ export default function ObservationsScreen() {
           className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus-visible:border-accent">
           {SIGNAL_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        <label className="flex items-center gap-1.5 text-xs text-muted">
+          <input type="checkbox" checked={needsClarificationOnly} onChange={(e) => setNeedsClarificationOnly(e.target.checked)} className="h-3.5 w-3.5 accent-accent" />
+          Needs clarification only
+        </label>
       </div>
 
       {observations === null && <p className="text-sm text-muted">Loading…</p>}
@@ -161,15 +167,22 @@ function ObservationCard({
   const [hypothesisConfidence, setHypothesisConfidence] = useState(o.hypothesis_confidence);
   const [confirmedBy, setConfirmedBy] = useState(o.confirmed_by);
   const [triggerContext, setTriggerContext] = useState(o.trigger_context);
+  const [raiseCondition, setRaiseCondition] = useState(o.raise_condition);
+  const [needsClarification, setNeedsClarification] = useState(o.needs_clarification);
   const [saving, setSaving] = useState(false);
 
   const dirty = status !== o.status || hypothesis !== o.hypothesis || hypothesisConfidence !== o.hypothesis_confidence
-    || confirmedBy !== o.confirmed_by || triggerContext !== o.trigger_context;
+    || confirmedBy !== o.confirmed_by || triggerContext !== o.trigger_context
+    || raiseCondition !== o.raise_condition || needsClarification !== o.needs_clarification;
 
   const save = async () => {
     setSaving(true);
     try {
-      await onSave({ status, hypothesis, hypothesis_confidence: Number(hypothesisConfidence), confirmed_by: confirmedBy, trigger_context: triggerContext });
+      await onSave({
+        status, hypothesis, hypothesis_confidence: Number(hypothesisConfidence),
+        confirmed_by: confirmedBy, trigger_context: triggerContext,
+        raise_condition: raiseCondition, needs_clarification: needsClarification,
+      });
     } finally {
       setSaving(false);
     }
@@ -186,11 +199,19 @@ function ObservationCard({
               <Zap size={11} /> Pattern candidate
             </span>
           )}
+          {o.needs_clarification && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[11px] font-medium text-muted">
+              <HelpCircle size={11} /> Needs clarification
+            </span>
+          )}
           {isAll && <AgentDot agentId={o.agent_id} showLabel />}
           <span className="ml-auto text-[11px] text-muted">{timeAgo(o.observed_at)}</span>
         </div>
         <p className="line-clamp-2 text-sm font-medium text-text/90">{o.hypothesis || <span className="text-muted">No hypothesis yet.</span>}</p>
         <p className="line-clamp-1 text-xs text-muted">{o.description}</p>
+        {o.needs_clarification && o.raise_condition && (
+          <p className="text-xs italic text-muted">raise if {o.raise_condition}</p>
+        )}
       </button>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -271,6 +292,19 @@ function ObservationCard({
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent" />
           </label>
 
+          <label className="flex items-center gap-2 text-sm text-text">
+            <input type="checkbox" checked={needsClarification} onChange={(e) => setNeedsClarification(e.target.checked)} className="h-4 w-4 accent-accent" />
+            Needs clarification
+          </label>
+
+          {needsClarification && (
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-muted">Raise condition (when to surface this)</span>
+              <input value={raiseCondition} onChange={(e) => setRaiseCondition(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent" />
+            </label>
+          )}
+
           <div className="flex justify-between gap-2">
             <Button variant="danger" onClick={onDelete}>Delete</Button>
             <Button variant="primary" disabled={!dirty || saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
@@ -287,6 +321,8 @@ function AddObservationModal({ agentIds, onClose, onCreated }) {
   const [hypothesis, setHypothesis] = useState('');
   const [hypothesisConfidence, setHypothesisConfidence] = useState('medium');
   const [triggerContext, setTriggerContext] = useState('');
+  const [needsClarification, setNeedsClarification] = useState(false);
+  const [raiseCondition, setRaiseCondition] = useState('');
   const [entityQuery, setEntityQuery] = useState('');
   const [entityResults, setEntityResults] = useState([]);
   const [selectedEntities, setSelectedEntities] = useState([]);
@@ -315,6 +351,8 @@ function AddObservationModal({ agentIds, onClose, onCreated }) {
         hypothesis,
         hypothesis_confidence: confidenceValue,
         trigger_context: triggerContext,
+        needs_clarification: needsClarification,
+        raise_condition: raiseCondition,
         entity_ids: selectedEntities.map((e) => e.id),
       });
     } finally {
@@ -351,6 +389,19 @@ function AddObservationModal({ agentIds, onClose, onCreated }) {
           <input value={triggerContext} onChange={(e) => setTriggerContext(e.target.value)}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent" />
         </label>
+
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input type="checkbox" checked={needsClarification} onChange={(e) => setNeedsClarification(e.target.checked)} className="h-4 w-4 accent-accent" />
+          Needs clarification
+        </label>
+
+        {needsClarification && (
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium text-muted">Raise condition (when to surface this)</span>
+            <input value={raiseCondition} onChange={(e) => setRaiseCondition(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text outline-none focus-visible:border-accent" />
+          </label>
+        )}
 
         <div>
           <span className="mb-1.5 block text-xs font-medium text-muted">Linked entities</span>

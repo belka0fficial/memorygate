@@ -63,7 +63,8 @@ export default function OverviewScreen() {
           api.get('/entity', undefined, id),
           api.get(`/pattern/active/${id}`, undefined, id).then((r) => r.results),
           api.post('/pattern/search', {}, undefined, id).then((r) => r.results),
-          api.post('/clarification/search', { status: 'pending' }, undefined, id).then((r) => r.results),
+          // "clarifications" are observations with needs_clarification=true now
+          api.post('/observation/search', { needs_clarification: true, status: 'unconfirmed' }, undefined, id).then((r) => r.results),
           api.post('/observation/search', {}, undefined, id).then((r) => r.results),
         ]);
         return { id, memories, entities, activePatterns, allPatterns, pendingClar, observations };
@@ -123,11 +124,16 @@ export default function OverviewScreen() {
         : `${r.action} a memory`;
     feed.push({ type: 'memory', agentId: who, text: `${who} ${label}`, timestamp: r.created_at });
   });
-  data.perAgent.forEach(({ id, entities, observations, allPatterns, pendingClar }) => {
+  data.perAgent.forEach(({ id, entities, observations, allPatterns }) => {
     entities.forEach((e) => feed.push({ type: 'entity', agentId: id, text: `${id} created entity "${e.name}"`, timestamp: e.created_at }));
-    observations.forEach((o) => feed.push({ type: 'observation', agentId: id, text: `${id} logged ${o.signal_type} observation`, timestamp: o.observed_at }));
+    // observations already include needs_clarification ones - don't double-push those from pendingClar too
+    observations.forEach((o) => feed.push({
+      type: o.needs_clarification ? 'clarification' : 'observation',
+      agentId: id,
+      text: o.needs_clarification ? `${id} flagged something needing clarification` : `${id} logged ${o.signal_type} observation`,
+      timestamp: o.observed_at,
+    }));
     allPatterns.forEach((p) => feed.push({ type: 'pattern', agentId: id, text: `${id} ${p.status === 'candidate' ? 'formed candidate pattern' : `${p.status} pattern`} "${p.pattern_name}"`, timestamp: p.created_at }));
-    pendingClar.forEach((c) => feed.push({ type: 'clarification', agentId: id, text: `${id} filed a clarification`, timestamp: c.observed_at }));
   });
   feed.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   const recentFeed = feed.slice(0, 20);
