@@ -8,10 +8,17 @@ import OverviewScreen from './screens/OverviewScreen';
 import BeliefsScreen from './screens/BeliefsScreen';
 import MemoriesScreen from './screens/MemoriesScreen';
 import EntitiesScreen from './screens/EntitiesScreen';
+import EvidencesScreen from './screens/EvidencesScreen';
 import ObservationsScreen from './screens/ObservationsScreen';
 import PatternsScreen from './screens/PatternsScreen';
 import BriefingScreen from './screens/BriefingScreen';
 import TranscriptsScreen from './screens/TranscriptsScreen';
+import SettingsScreen from './screens/SettingsScreen';
+import DevScreen from './screens/DevScreen';
+import DatabaseScreen from './screens/DatabaseScreen';
+import PipelineScreen from './screens/PipelineScreen';
+import WindowsScreen from './screens/WindowsScreen';
+import EpisodesScreen from './screens/EpisodesScreen';
 
 function Gate() {
   const { authed, checking } = useAuth();
@@ -33,13 +40,20 @@ function Gate() {
           <Route element={<Layout />}>
             <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewScreen />} />
+            <Route path="/pipeline" element={<PipelineScreen />} />
+            <Route path="/windows" element={<WindowsScreen />} />
+            <Route path="/database" element={<DatabaseScreen />} />
             <Route path="/beliefs" element={<BeliefsScreen />} />
             <Route path="/memories" element={<MemoriesScreen />} />
             <Route path="/entities" element={<EntitiesScreen />} />
+            <Route path="/evidences" element={<EvidencesScreen />} />
+            <Route path="/episodes" element={<EpisodesScreen />} />
             <Route path="/observations" element={<ObservationsScreen />} />
             <Route path="/patterns" element={<PatternsScreen />} />
             <Route path="/briefing" element={<BriefingScreen />} />
             <Route path="/transcripts" element={<TranscriptsScreen />} />
+            <Route path="/dev" element={<DevScreen />} />
+            <Route path="/settings" element={<SettingsScreen />} />
             <Route path="*" element={<Navigate to="/overview" replace />} />
           </Route>
         </Routes>

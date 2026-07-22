@@ -1,14 +1,26 @@
-import secrets
-from fastapi import Header, HTTPException
-from app.core.config import MEMORYGATE_ADMIN_KEY
+from fastapi import Header, HTTPException, Request
+from app.core.db import SessionLocal
+from app.services.auth_settings_service import clear_failed_attempts, get_auth_state, get_lockout_status, register_failed_attempt, verify_admin_key
 
 
-def require_key(x_memorygate_key: str | None = Header(None, alias="X-MemoryGate-Key")) -> str:
-    """No key configured (MEMORYGATE_ADMIN_KEY unset) disables auth entirely - dev convenience,
-    matching this service's existing no-auth default. Once a key is configured, every route
-    routed through this dependency requires it, except /health."""
-    if not MEMORYGATE_ADMIN_KEY:
-        return "disabled"
-    if not x_memorygate_key or not secrets.compare_digest(x_memorygate_key, MEMORYGATE_ADMIN_KEY):
-        raise HTTPException(401, "missing or invalid X-MemoryGate-Key")
-    return "admin"
+def require_key(request: Request, x_memorygate_key: str | None = Header(None, alias="X-MemoryGate-Key")) -> str:
+    """Auth is disabled only when neither an env key nor a DB-managed key exists."""
+    client_host = request.client.host if request.client else "unknown"
+    lock_scope = f"auth:{client_host}"
+    db = SessionLocal()
+    try:
+        state = get_auth_state(db)
+        if not state["auth_enabled"]:
+            return "disabled"
+        remaining = get_lockout_status(lock_scope)
+        if remaining:
+            raise HTTPException(429, f"Too many failed attempts. Try again in {remaining} seconds.")
+        if not verify_admin_key(db, x_memorygate_key):
+            remaining = register_failed_attempt(lock_scope)
+            if remaining:
+                raise HTTPException(429, f"Too many failed attempts. Try again in {remaining} seconds.")
+            raise HTTPException(401, "missing or invalid X-MemoryGate-Key")
+        clear_failed_attempts(lock_scope)
+        return "admin"
+    finally:
+        db.close()

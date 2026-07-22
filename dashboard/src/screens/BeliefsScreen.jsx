@@ -82,8 +82,8 @@ function MemoryRow({ memory, isAll }) {
         <div className="border-t border-border p-4">
           <span className="mb-2 block text-xs font-medium text-muted">Evidence</span>
           <p className="text-xs text-text/80">
-            This is a durable fact recorded directly from conversation, not derived from a pattern of
-            observations - the memory text above is its own evidence.
+            This is a durable data object recorded directly from conversation, not derived from a pattern of
+            observations. The text above is its primary source form.
           </p>
           {memory.tags.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -115,15 +115,15 @@ export default function BeliefsScreen() {
 
   return (
     <div className="p-5 md:p-8">
-      <h1 className="text-lg font-medium text-text">Beliefs</h1>
-      <p className="mb-6 text-sm text-muted">What Conker believes about you.</p>
+      <h1 className="text-lg font-medium text-text">Knowledge</h1>
+      <p className="mb-6 text-sm text-muted">The highest-confidence layer of MemoryGate: promoted patterns and durable data objects ready for direct use.</p>
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted"><Loader2 size={14} className="animate-spin" /> Loading…</div>
       ) : (
         <div className="flex flex-col gap-8">
           <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Active patterns</h2>
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Pattern knowledge</h2>
             {patterns.length === 0 ? (
               <p className="text-sm text-muted">No active patterns yet.</p>
             ) : (
@@ -134,7 +134,7 @@ export default function BeliefsScreen() {
           </section>
 
           <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">High-confidence memories</h2>
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Stable data objects</h2>
             {memories.length === 0 ? (
               <p className="text-sm text-muted">No high-confidence memories yet.</p>
             ) : (

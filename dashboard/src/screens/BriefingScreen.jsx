@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Sunrise, RefreshCw, Loader2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAgent } from '../context/AgentContext';
-import AgentSelector from '../components/AgentSelector';
 
 function initials(name) {
   return name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
@@ -44,12 +43,8 @@ export default function BriefingScreen() {
 
   return (
     <div className="p-5 md:p-8">
-      <h1 className="mb-6 text-center text-lg font-medium text-text">Session Briefing Preview</h1>
-
-      <div className="mx-auto mb-8 max-w-sm">
-        <AgentSelector large />
-      </div>
-
+      <h1 className="mb-2 text-center text-lg font-medium text-text">Realtime Window</h1>
+      <p className="mb-6 text-center text-sm text-muted">A live, session-ready assembly of the most relevant memory for immediate conversation use.</p>
       {!briefing && (
         <div className="flex items-center justify-center gap-2 text-sm text-muted"><Loader2 size={14} className="animate-spin" /> Loading…</div>
       )}

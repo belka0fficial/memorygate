@@ -30,7 +30,10 @@ const AgentContext = createContext(null);
 
 export function AgentProvider({ children }) {
   const [customAgents, setCustomAgents] = useState(loadCustomAgents);
-  const [agentId, setAgentIdState] = useState(() => localStorage.getItem(SELECTED_KEY) || 'conker');
+  const [agentId, setAgentIdState] = useState(() => {
+    const stored = localStorage.getItem(SELECTED_KEY);
+    return stored && stored !== 'all' ? stored : 'conker';
+  });
 
   const agents = [...BUILTIN_AGENTS, ...customAgents];
 

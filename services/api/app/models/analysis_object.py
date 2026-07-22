@@ -1,0 +1,17 @@
+from sqlalchemy import String, Text, DateTime, Float, func
+from sqlalchemy.orm import Mapped, mapped_column
+from app.core.db import Base
+import uuid
+
+
+class AnalysisObject(Base):
+    __tablename__ = "analysis_objects"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    analysis_type: Mapped[str] = mapped_column(String, index=True)
+    evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    input_summary: Mapped[str] = mapped_column(Text, default="")
+    output_summary: Mapped[str] = mapped_column(Text, default="")
+    steps_json: Mapped[str] = mapped_column(Text, default="[]")
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())

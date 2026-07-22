@@ -1,0 +1,19 @@
+import uuid
+from sqlalchemy import DateTime, Float, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column
+from app.core.db import Base
+
+
+class ObjectLink(Base):
+    __tablename__ = "object_links"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_type: Mapped[str] = mapped_column(String, index=True)
+    source_id: Mapped[str] = mapped_column(String, index=True)
+    target_type: Mapped[str] = mapped_column(String, index=True)
+    target_id: Mapped[str] = mapped_column(String, index=True)
+    relationship: Mapped[str] = mapped_column(String, index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[str] = mapped_column(String, default="system")
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -37,6 +37,114 @@ _CLARIFICATION_STATUS_MAP = {
 
 def run_migrations(engine: Engine) -> None:
     with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS auth_settings ("
+            "id TEXT PRIMARY KEY, "
+            "admin_key_hash TEXT NOT NULL DEFAULT ''"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS evidence_sources ("
+            "id TEXT PRIMARY KEY, "
+            "source_key TEXT NOT NULL UNIQUE, "
+            "source_type TEXT NOT NULL, "
+            "label TEXT NOT NULL, "
+            "description TEXT NOT NULL DEFAULT '', "
+            "config_json TEXT NOT NULL DEFAULT '{}', "
+            "secret_json TEXT NOT NULL DEFAULT '{}', "
+            "enabled BOOLEAN NOT NULL DEFAULT true, "
+            "last_ingested_at TIMESTAMPTZ NULL, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_evidence_sources_source_key ON evidence_sources (source_key)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_evidence_sources_source_type ON evidence_sources (source_type)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS evidence_objects ("
+            "id TEXT PRIMARY KEY, "
+            "source_id TEXT NOT NULL, "
+            "source_key TEXT NOT NULL, "
+            "source_type TEXT NOT NULL, "
+            "title TEXT NOT NULL DEFAULT '', "
+            "summary TEXT NOT NULL DEFAULT '', "
+            "raw_payload_json TEXT NOT NULL DEFAULT '{}', "
+            "normalized_payload_json TEXT NOT NULL DEFAULT '{}', "
+            "tags_json TEXT NOT NULL DEFAULT '[]', "
+            "integrity_confidence FLOAT NOT NULL DEFAULT 1.0, "
+            "occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_evidence_objects_source_key ON evidence_objects (source_key)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_evidence_objects_source_type ON evidence_objects (source_type)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_evidence_objects_occurred_at ON evidence_objects (occurred_at)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS analysis_objects ("
+            "id TEXT PRIMARY KEY, "
+            "analysis_type TEXT NOT NULL, "
+            "evidence_ids_json TEXT NOT NULL DEFAULT '[]', "
+            "input_summary TEXT NOT NULL DEFAULT '', "
+            "output_summary TEXT NOT NULL DEFAULT '', "
+            "steps_json TEXT NOT NULL DEFAULT '[]', "
+            "confidence FLOAT NOT NULL DEFAULT 0.5, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_analysis_objects_analysis_type ON analysis_objects (analysis_type)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS episode_objects ("
+            "id TEXT PRIMARY KEY, "
+            "agent_id TEXT NOT NULL DEFAULT 'default', "
+            "title TEXT NOT NULL DEFAULT '', "
+            "summary TEXT NOT NULL DEFAULT '', "
+            "episode_type TEXT NOT NULL DEFAULT 'event', "
+            "status TEXT NOT NULL DEFAULT 'open', "
+            "confidence FLOAT NOT NULL DEFAULT 1.0, "
+            "tags_json TEXT NOT NULL DEFAULT '[]', "
+            "occurred_start TIMESTAMPTZ NULL, "
+            "occurred_end TIMESTAMPTZ NULL, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        ))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_episode_objects_agent_id ON episode_objects (agent_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_episode_objects_episode_type ON episode_objects (episode_type)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_episode_objects_status ON episode_objects (status)"))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS object_links ("
+            "id TEXT PRIMARY KEY, "
+            "source_type TEXT NOT NULL, "
+            "source_id TEXT NOT NULL, "
+            "target_type TEXT NOT NULL, "
+            "target_id TEXT NOT NULL, "
+            "relationship TEXT NOT NULL, "
+            "confidence FLOAT NOT NULL DEFAULT 1.0, "
+            "metadata_json TEXT NOT NULL DEFAULT '{}', "
+            "created_by TEXT NOT NULL DEFAULT 'system', "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        ))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_object_links_source ON object_links (source_type, source_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_object_links_target ON object_links (target_type, target_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_object_links_relationship ON object_links (relationship)"))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_object_links_path "
+            "ON object_links (source_type, source_id, target_type, target_id, relationship)"
+        ))
+
         for table in _AGENT_ID_TABLES:
             conn.execute(text(
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT 'default'"
@@ -70,6 +178,7 @@ def run_migrations(engine: Engine) -> None:
         _migrate_memory_types(conn)
         _migrate_clarifications(conn)
         _merge_duplicate_entities(conn)
+        _backfill_object_links(conn)
 
 
 def _table_exists(conn, name: str) -> bool:
@@ -310,6 +419,40 @@ def _merge_duplicate_entities(conn) -> None:
             conn.execute(text(f"UPDATE {table} SET {column} = :v WHERE id = :id"), {"v": json.dumps(new_ids), "id": row.id})
 
     conn.execute(text("DELETE FROM entities WHERE id = ANY(:ids)"), {"ids": list(replace_map.keys())})
+
+
+def _backfill_object_links(conn) -> None:
+    """Materialize relationships already embedded in legacy JSON arrays."""
+    specs = (
+        ("analysis_objects", "evidence_ids_json", "evidence", "analysis", "analyzed_into"),
+        ("patterns", "observation_ids_json", "observation", "pattern", "supports"),
+        ("observations", "entity_ids_json", "observation", "entity", "about"),
+        ("patterns", "applies_to_entity_ids_json", "pattern", "entity", "applies_to"),
+    )
+    for table, json_column, member_type, row_type, relationship in specs:
+        if not _table_exists(conn, table):
+            continue
+        rows = conn.execute(text(f"SELECT id, {json_column} AS ids FROM {table}")).fetchall()
+        for row in rows:
+            try:
+                member_ids = json.loads(row.ids or "[]")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            for member_id in member_ids:
+                if relationship in ("about", "applies_to"):
+                    source_type, source_id = row_type, row.id
+                    target_type, target_id = member_type, member_id
+                else:
+                    source_type, source_id = member_type, member_id
+                    target_type, target_id = row_type, row.id
+                conn.execute(text(
+                    "INSERT INTO object_links (id, source_type, source_id, target_type, target_id, relationship, confidence, metadata_json, created_by) "
+                    "VALUES (:id, :st, :sid, :tt, :tid, :rel, 1.0, '{}', 'migration') "
+                    "ON CONFLICT (source_type, source_id, target_type, target_id, relationship) DO NOTHING"
+                ), {
+                    "id": str(uuid.uuid4()), "st": source_type, "sid": source_id,
+                    "tt": target_type, "tid": target_id, "rel": relationship,
+                })
 
 
 def _rename_column(conn, table: str, old: str, new: str) -> None:

@@ -11,7 +11,13 @@ from app.routes.pattern import router as pattern_router
 from app.routes.agent_config import router as agent_config_router
 from app.routes.briefing import router as briefing_router
 from app.routes.transcript import router as transcript_router
+from app.routes.auth_settings import router as auth_settings_router
+from app.routes.evidence import router as evidence_router
+from app.routes.lineage import router as lineage_router
 from app.models import memory, audit, agent_config
+from app.models import auth_setting
+from app.models import evidence_source, evidence_object, analysis_object
+from app.models import episode_object, object_link
 from app.models import entity
 from app.models import observation
 from app.models import pattern
@@ -51,6 +57,9 @@ def auth_check(tier: str = Depends(require_key)):
 
 _auth = [Depends(require_key)]
 
+app.include_router(auth_settings_router, dependencies=_auth)
+app.include_router(evidence_router, dependencies=_auth)
+app.include_router(lineage_router, dependencies=_auth)
 app.include_router(memory_router, dependencies=_auth)
 app.include_router(audit_router, dependencies=_auth)
 app.include_router(entity_router, dependencies=_auth)

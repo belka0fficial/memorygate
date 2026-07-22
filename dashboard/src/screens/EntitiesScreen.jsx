@@ -114,7 +114,10 @@ export default function EntitiesScreen() {
   return (
     <div className="p-5 md:p-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-medium text-text">Entities</h1>
+        <div>
+          <h1 className="text-lg font-medium text-text">Entity Graph</h1>
+          <p className="mt-1 text-sm text-muted">Structured people, places, projects, and concepts connected into one inspectable memory graph.</p>
+        </div>
         <div className="flex gap-1 rounded-lg border border-border bg-surface p-1">
           <button onClick={() => setView('graph')} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${view === 'graph' ? 'bg-white/[0.08] text-text' : 'text-muted hover:text-text'}`}>Graph</button>
           <button onClick={() => setView('table')} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${view === 'table' ? 'bg-white/[0.08] text-text' : 'text-muted hover:text-text'}`}>Table</button>

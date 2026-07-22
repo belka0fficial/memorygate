@@ -1,25 +1,37 @@
 import { useState, useRef, useEffect } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Home, Sparkles, Share2, Eye, TrendingUp, Sunrise, FileText, Brain, MoreHorizontal, ChevronDown, ChevronRight } from 'lucide-react';
+import { NavLink, Outlet } from 'react-router-dom';
+import { Activity, Boxes, Brain, Braces, CalendarRange, Database, Eye, FileText, Gauge, MoreHorizontal, Radio, Settings, Share2, Sparkles, TrendingUp, Waypoints } from 'lucide-react';
 import Logo from './Logo';
-import AgentSelector from './AgentSelector';
 
-const PRIMARY_NAV_ITEMS = [
-  { to: '/overview', label: 'Overview', icon: Home },
-  { to: '/beliefs', label: 'Beliefs', icon: Sparkles },
-  { to: '/entities', label: 'Entities', icon: Share2 },
-  { to: '/briefing', label: 'Briefing', icon: Sunrise },
-  { to: '/transcripts', label: 'Transcripts', icon: FileText },
+const NAV_GROUPS = [
+  { label: 'Operate', items: [
+    { to: '/overview', label: 'Command Center', icon: Gauge },
+    { to: '/pipeline', label: 'Live Pipeline', icon: Activity },
+    { to: '/windows', label: 'Memory Windows', icon: Boxes },
+    { to: '/briefing', label: 'Realtime Context', icon: Radio },
+  ] },
+  { label: 'Knowledge', items: [
+    { to: '/database', label: 'Database', icon: Database },
+    { to: '/entities', label: 'Entities', icon: Share2 },
+    { to: '/beliefs', label: 'Resolved Knowledge', icon: Sparkles },
+    { to: '/memories', label: 'Data Objects', icon: Brain },
+  ] },
+  { label: 'Processing', items: [
+    { to: '/evidences', label: 'Sources & Evidence', icon: Waypoints },
+    { to: '/episodes', label: 'Episodes', icon: CalendarRange },
+    { to: '/transcripts', label: 'Sessions', icon: FileText },
+    { to: '/observations', label: 'Observations', icon: Eye },
+    { to: '/patterns', label: 'Derived Patterns', icon: TrendingUp },
+  ] },
+  { label: 'System', items: [
+    { to: '/dev', label: 'Architecture', icon: Braces },
+    { to: '/settings', label: 'Settings', icon: Settings },
+  ] },
 ];
 
-const DEBUG_NAV_ITEMS = [
-  { to: '/memories', label: 'Memories', icon: Brain },
-  { to: '/observations', label: 'Observations', icon: Eye },
-  { to: '/patterns', label: 'Patterns', icon: TrendingUp },
-];
-
-const MOBILE_PRIMARY = PRIMARY_NAV_ITEMS.slice(0, 4);
-const MOBILE_OVERFLOW = [PRIMARY_NAV_ITEMS[4], ...DEBUG_NAV_ITEMS];
+const ALL_NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.items);
+const MOBILE_PRIMARY = ALL_NAV_ITEMS.slice(0, 4);
+const MOBILE_OVERFLOW = ALL_NAV_ITEMS.slice(4);
 
 function NavItem({ to, label, icon: Icon }) {
   return (
@@ -40,35 +52,20 @@ function NavItem({ to, label, icon: Icon }) {
 }
 
 function DesktopSidebar() {
-  const location = useLocation();
-  const debugActive = DEBUG_NAV_ITEMS.some((item) => location.pathname === item.to);
-  const [debugOpen, setDebugOpen] = useState(debugActive);
-
   return (
-    <aside className="fixed inset-y-0 left-0 hidden w-60 flex-col border-r border-border bg-surface md:flex">
+    <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 flex-col border-r border-border bg-surface md:flex">
       <div className="px-5 py-5">
         <Logo />
       </div>
-      <div className="px-3 pb-3">
-        <AgentSelector />
-      </div>
-      <nav className="flex flex-1 flex-col gap-0.5 px-3">
-        {PRIMARY_NAV_ITEMS.map((item) => <NavItem key={item.to} {...item} />)}
-
-        <button
-          onClick={() => setDebugOpen((o) => !o)}
-          className="mt-3 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-text"
-        >
-          {debugOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          Debug
-        </button>
-        {debugOpen && (
-          <div className="flex flex-col gap-0.5 pl-1">
-            {DEBUG_NAV_ITEMS.map((item) => <NavItem key={item.to} {...item} />)}
-          </div>
-        )}
+      <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4">
+        {NAV_GROUPS.map((group) => <div key={group.label}><div className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted/60">{group.label}</div><div className="space-y-0.5">{group.items.map((item) => <NavItem key={item.to} {...item} />)}</div></div>)}
       </nav>
-      <div className="px-5 py-4 text-xs text-muted">v0.1.0</div>
+      <div className="px-5 py-4">
+        <div className="mb-1 flex items-center gap-1.5 text-xs text-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> MemoryGate online
+        </div>
+        <div className="text-xs text-muted">v0.1.0</div>
+      </div>
     </aside>
   );
 }

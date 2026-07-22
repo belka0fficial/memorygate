@@ -26,7 +26,7 @@ export default function AuthScreen() {
           <Logo />
         </div>
 
-        <div className="rounded-lg border border-border bg-surface p-6">
+        <div className="rounded-xl border border-border bg-surface p-6">
           <h1 className="text-base font-medium text-text">Enter admin key</h1>
           <p className="mt-1 text-sm text-muted">
             Access requires the MemoryGate admin key.
