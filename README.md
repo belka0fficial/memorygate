@@ -118,6 +118,29 @@ The dashboard is a single-workspace operating console for one agent:
 - **Architecture**: developer-facing object, lineage, truth, and search model.
 - **Settings**: keys, backups, AI runtime, and destructive operations.
 
+### Database Inspection
+
+Search every durable object from one table, then open an object to inspect its
+metadata, history, and connected records.
+
+![MemoryGate database inspection](docs/screenshots/database.png)
+
+### Memory Lab
+
+Memory Lab answers independent, read-only questions. It keeps an investigation
+list only in the current browser session and exposes the exact retrieved
+objects used for each answer.
+
+![MemoryGate Memory Lab](docs/screenshots/memory-lab.png)
+
+### Operations and Safety
+
+Settings keeps access controls, backups, model configuration, and destructive
+reset controls together. Reset actions require the current admin key and an
+explicit confirmation phrase.
+
+![MemoryGate settings and danger zone](docs/screenshots/settings.png)
+
 ## Agent Integration
 
 Give external agents a **read key**, not the admin key. They should retrieve context before answering or acting, then send raw events through a listener or approved ingest path.
