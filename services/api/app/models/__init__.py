@@ -7,3 +7,4 @@ from .evidence_object import EvidenceObject
 from .analysis_object import AnalysisObject
 from .episode_object import EpisodeObject
 from .object_link import ObjectLink
+from .processing_job import ProcessingJob

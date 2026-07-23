@@ -1,5 +1,7 @@
 # MemoryGate
 
+Agent/runtime integration: see [`docs/AGENT_INTEGRATION.md`](docs/AGENT_INTEGRATION.md).
+
 **The canonical long-term memory service for [Conker](https://github.com/belka0fficial/conker).**
 
 MemoryGate is a FastAPI service backed by **Postgres** (structured data) and **Qdrant**

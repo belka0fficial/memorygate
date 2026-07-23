@@ -8,6 +8,7 @@ class AnalysisObject(Base):
     __tablename__ = "analysis_objects"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_id: Mapped[str] = mapped_column(String, default="default", index=True)
     analysis_type: Mapped[str] = mapped_column(String, index=True)
     evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     input_summary: Mapped[str] = mapped_column(Text, default="")

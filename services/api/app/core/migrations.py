@@ -89,6 +89,12 @@ def run_migrations(engine: Engine) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_evidence_objects_occurred_at ON evidence_objects (occurred_at)"
         ))
+        conn.execute(text("ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT 'default'"))
+        conn.execute(text("ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS processing_state TEXT NOT NULL DEFAULT 'pending'"))
+        conn.execute(text("ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS invalidated_at TIMESTAMPTZ"))
+        conn.execute(text("ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS invalidation_reason TEXT NOT NULL DEFAULT ''"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_objects_agent_id ON evidence_objects (agent_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_objects_processing_state ON evidence_objects (processing_state)"))
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS analysis_objects ("
             "id TEXT PRIMARY KEY, "
@@ -104,6 +110,8 @@ def run_migrations(engine: Engine) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_analysis_objects_analysis_type ON analysis_objects (analysis_type)"
         ))
+        conn.execute(text("ALTER TABLE analysis_objects ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT 'default'"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_analysis_objects_agent_id ON analysis_objects (agent_id)"))
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS episode_objects ("
             "id TEXT PRIMARY KEY, "
@@ -144,6 +152,17 @@ def run_migrations(engine: Engine) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_object_links_path "
             "ON object_links (source_type, source_id, target_type, target_id, relationship)"
         ))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS processing_jobs ("
+            "id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, evidence_id TEXT NOT NULL, "
+            "status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, "
+            "stage TEXT NOT NULL DEFAULT 'ingest', error TEXT NOT NULL DEFAULT '', "
+            "result_json TEXT NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+        ))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_agent_id ON processing_jobs (agent_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_evidence_id ON processing_jobs (evidence_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_status ON processing_jobs (status)"))
 
         for table in _AGENT_ID_TABLES:
             conn.execute(text(

@@ -7,6 +7,7 @@ const NAV_GROUPS = [
   { label: 'Operate', items: [
     { to: '/overview', label: 'Command Center', icon: Gauge },
     { to: '/pipeline', label: 'Live Pipeline', icon: Activity },
+    { to: '/runtime', label: 'Agent Runtime', icon: Brain },
     { to: '/windows', label: 'Memory Windows', icon: Boxes },
     { to: '/briefing', label: 'Realtime Context', icon: Radio },
   ] },

@@ -1,12 +1,13 @@
 import json
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from app.core.db import SessionLocal
 from app.models.evidence_source import EvidenceSource
 from app.models.evidence_object import EvidenceObject
 from app.models.analysis_object import AnalysisObject
 from app.schemas.evidence import EvidenceObjectCreateRequest, EvidenceSourceUpsertRequest
+from app.core.agent import get_agent_id
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -38,6 +39,7 @@ def _source_to_dict(row: EvidenceSource) -> dict:
 def _evidence_to_dict(row: EvidenceObject) -> dict:
     return {
         "id": row.id,
+        "agent_id": row.agent_id,
         "source_id": row.source_id,
         "source_key": row.source_key,
         "source_type": row.source_type,
@@ -47,6 +49,9 @@ def _evidence_to_dict(row: EvidenceObject) -> dict:
         "normalized_payload": json.loads(row.normalized_payload_json or "{}"),
         "tags": json.loads(row.tags_json or "[]"),
         "integrity_confidence": row.integrity_confidence,
+        "processing_state": row.processing_state,
+        "invalidated_at": row.invalidated_at.isoformat() if row.invalidated_at else None,
+        "invalidation_reason": row.invalidation_reason,
         "occurred_at": row.occurred_at.isoformat() if row.occurred_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
@@ -97,10 +102,10 @@ def upsert_source(payload: EvidenceSourceUpsertRequest):
 
 
 @router.get("")
-def list_evidence(source_key: str | None = None, limit: int = 100):
+def list_evidence(source_key: str | None = None, limit: int = 100, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
-        stmt = select(EvidenceObject).order_by(EvidenceObject.occurred_at.desc()).limit(max(1, min(limit, 300)))
+        stmt = select(EvidenceObject).where(EvidenceObject.agent_id == agent_id).order_by(EvidenceObject.occurred_at.desc()).limit(max(1, min(limit, 300)))
         if source_key:
             stmt = stmt.where(EvidenceObject.source_key == source_key.strip().lower())
         rows = db.execute(stmt).scalars().all()
@@ -110,7 +115,7 @@ def list_evidence(source_key: str | None = None, limit: int = 100):
 
 
 @router.post("")
-def create_evidence(payload: EvidenceObjectCreateRequest):
+def create_evidence(payload: EvidenceObjectCreateRequest, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
         source_key = payload.source_key.strip().lower()
@@ -119,6 +124,7 @@ def create_evidence(payload: EvidenceObjectCreateRequest):
             raise HTTPException(404, f"Evidence source '{source_key}' not found")
         occurred_at = _parse_dt(payload.occurred_at)
         row = EvidenceObject(
+            agent_id=agent_id,
             source_id=source.id,
             source_key=source.source_key,
             source_type=source.source_type,
@@ -140,16 +146,17 @@ def create_evidence(payload: EvidenceObjectCreateRequest):
 
 
 @router.get("/analysis")
-def list_analysis(limit: int = 100):
+def list_analysis(limit: int = 100, agent_id: str = Depends(get_agent_id)):
     db = SessionLocal()
     try:
         rows = db.execute(
-            select(AnalysisObject).order_by(AnalysisObject.created_at.desc()).limit(max(1, min(limit, 300)))
+            select(AnalysisObject).where(AnalysisObject.agent_id == agent_id).order_by(AnalysisObject.created_at.desc()).limit(max(1, min(limit, 300)))
         ).scalars().all()
         return {
             "results": [
                 {
                     "id": row.id,
+                    "agent_id": row.agent_id,
                     "analysis_type": row.analysis_type,
                     "evidence_ids": json.loads(row.evidence_ids_json or "[]"),
                     "input_summary": row.input_summary,
