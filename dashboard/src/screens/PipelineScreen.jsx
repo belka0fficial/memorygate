@@ -32,8 +32,8 @@ export default function PipelineScreen() {
   const load = async () => {
     setLoading(true);
     const [evidence, analyses, audit, ...agentData] = await Promise.all([
-      safe(api.get('/evidence', { limit: 100 }).then((r) => r.results)),
-      safe(api.get('/evidence/analysis', { limit: 100 }).then((r) => r.results)),
+      Promise.all(agentIds.map((id) => safe(api.get('/evidence', { limit: 100 }, id).then((r) => r.results)))).then((rows) => rows.flat()),
+      Promise.all(agentIds.map((id) => safe(api.get('/evidence/analysis', { limit: 100 }, id).then((r) => r.results)))).then((rows) => rows.flat()),
       safe(api.get('/audit')),
       ...agentIds.map(async (id) => ({
         id,
@@ -54,7 +54,10 @@ export default function PipelineScreen() {
     });
     evidence.forEach((v) => next.push(event('evidence', v, v.title, `${v.source_type} · integrity ${Math.round(v.integrity_confidence * 100)}%`, v.created_at || v.occurred_at)));
     analyses.forEach((v) => next.push(event('analysis', v, v.output_summary || v.analysis_type, `${v.evidence_ids.length} evidence inputs · ${Math.round(v.confidence * 100)}%`, v.created_at)));
-    audit.slice(0, 100).forEach((v) => {
+    audit.filter((v) => {
+      if (agentId === 'all') return true;
+      try { return JSON.parse(v.payload_json || '{}').agent_id === agentId; } catch { return false; }
+    }).slice(0, 100).forEach((v) => {
       let payload = {}; try { payload = JSON.parse(v.payload_json || '{}'); } catch { /* raw payload remains inspectable */ }
       next.push(event('response', { ...v, payload }, `${v.action} operation`, payload.text || payload.reason || `Memory operation ${v.memory_id || ''}`, v.created_at, payload.agent_id));
     });
@@ -94,7 +97,7 @@ export default function PipelineScreen() {
         <div><span className="pulse-dot" /><strong>Collector online</strong><small>{lastSync ? `synced ${lastSync.toLocaleTimeString()}` : 'connecting'}</small></div>
         <div><Activity size={16} /><strong>{recent.length}</strong><small>recent operations</small></div>
         <div><Clock3 size={16} /><strong>5 sec</strong><small>refresh interval</small></div>
-        <div><Radio size={16} /><strong>{agentIds.length}</strong><small>agent stream</small></div>
+        <div><Radio size={16} /><strong>1</strong><small>local memory stream</small></div>
       </div>
 
       <section className="pipeline-map">
@@ -117,7 +120,7 @@ export default function PipelineScreen() {
           {selected ? <>
             <div className="trace-stage" style={{ '--trace-color': STAGE_META[selected.stage].color }}><span>{STAGE_META[selected.stage].label}</span><b>{selected.at ? new Date(selected.at).toLocaleString() : 'No timestamp'}</b></div>
             <h3>{selected.title}</h3><p>{selected.detail}</p>
-            <div className="trace-facts"><div><span>Object ID</span><code>{selected.item.id}</code></div><div><span>Agent</span><code>{selected.agentId || selected.item.source_key || 'system'}</code></div><div><span>Processing state</span><code>recorded</code></div></div>
+            <div className="trace-facts"><div><span>Object ID</span><code>{selected.item.id}</code></div><div><span>Source</span><code>{selected.item.source_key || 'local memory'}</code></div><div><span>Processing state</span><code>recorded</code></div></div>
             <h4>Exact lineage</h4>
             {lineage && (lineage.incoming.length || lineage.outgoing.length) ? <div className="mx-[15px] space-y-1.5">{lineage.incoming.map((link) => <div key={link.id} className="lineage-row"><span className="text-[10px] text-muted">{link.source_type} <b className="text-text">{link.relationship}</b> this object</span></div>)}{lineage.outgoing.map((link) => <div key={link.id} className="lineage-row"><span className="text-[10px] text-muted">this object <b className="text-text">{link.relationship}</b> {link.target_type}</span></div>)}</div> : <p>{lineage ? 'No exact links recorded for this object.' : 'Loading lineage...'}</p>}
             <h4>Recorded payload</h4><pre>{JSON.stringify(selected.item, null, 2)}</pre>

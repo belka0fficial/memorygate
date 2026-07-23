@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "memorygate": {
+      "command": "python",
+      "args": ["services/mcp/memorygate_mcp.py"],
+      "env": {
+        "MEMORYGATE_URL": "http://127.0.0.1:8020",
+        "MEMORYGATE_AGENT_ID": "replace-with-agent-id",
+        "MEMORYGATE_KEY": "replace-with-read-only-key"
+      }
+    }
+  }
+}

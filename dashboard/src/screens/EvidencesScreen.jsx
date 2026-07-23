@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Database, KeyRound, Loader2, Plus, RadioTower, ReceiptText } from 'lucide-react';
 import { api } from '../lib/api';
+import { useAgent } from '../context/AgentContext';
 import Button from '../components/Button';
 import Modal from '../components/Modal';
 import TextField, { TextArea } from '../components/TextField';
@@ -167,18 +168,34 @@ function EvidenceModal({ sources, onClose, onSaved }) {
   );
 }
 
+function ListenerKeyModal({ credential, onClose }) {
+  const endpoint = `${window.location.protocol}//${window.location.hostname}:8020/runtime/listeners/${credential.source_key}`;
+  return (
+    <Modal title="Listener ingest key" onClose={onClose} width="max-w-2xl">
+      <p className="mb-4 text-sm text-muted">Copy the new key now. It is shown once, and the previous listener key stopped working immediately.</p>
+      <p className="mb-1 text-xs font-medium text-muted">Webhook endpoint</p>
+      <code className="mb-4 block overflow-x-auto rounded-md bg-background px-3 py-2 text-xs text-text">POST {endpoint}</code>
+      <p className="mb-1 text-xs font-medium text-muted">X-MemoryGate-Listener-Key</p>
+      <code className="block overflow-x-auto rounded-md bg-background px-3 py-2 text-xs text-accent">{credential.ingest_key}</code>
+      <div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => navigator.clipboard.writeText(credential.ingest_key)}><KeyRound size={14} /> Copy key</Button><Button onClick={onClose}>Done</Button></div>
+    </Modal>
+  );
+}
+
 export default function EvidencesScreen() {
+  const { agentId } = useAgent();
   const [sources, setSources] = useState(null);
   const [evidence, setEvidence] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all');
   const [modal, setModal] = useState(null);
+  const [listenerCredential, setListenerCredential] = useState(null);
 
   async function load() {
     const [sourceRes, evidenceRes, analysisRes] = await Promise.all([
       api.get('/evidence/sources').then((r) => r.results),
-      api.get('/evidence').then((r) => r.results),
-      api.get('/evidence/analysis').then((r) => r.results),
+      api.get('/evidence', undefined, agentId).then((r) => r.results),
+      api.get('/evidence/analysis', undefined, agentId).then((r) => r.results),
     ]);
     setSources(sourceRes);
     setEvidence(evidenceRes);
@@ -187,7 +204,17 @@ export default function EvidencesScreen() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [agentId]);
+
+  async function rotateListenerKey(sourceKey) {
+    try {
+      const credential = await api.post(`/evidence/sources/${sourceKey}/rotate-ingest-key`, {});
+      setListenerCredential(credential);
+      load();
+    } catch (err) {
+      window.alert(err.message || 'Unable to rotate the listener key.');
+    }
+  }
 
   const filteredEvidence = useMemo(() => {
     if (!evidence) return [];
@@ -239,6 +266,9 @@ export default function EvidencesScreen() {
               </div>
               <Button variant="secondary" className="!py-1.5 text-xs" onClick={() => setModal({ type: 'source', initial: source })}>
                 <KeyRound size={13} /> Edit
+              </Button>
+              <Button variant="secondary" className="!py-1.5 text-xs" onClick={() => rotateListenerKey(source.source_key)}>
+                <KeyRound size={13} /> Rotate key
               </Button>
             </div>
           ))
@@ -305,6 +335,7 @@ export default function EvidencesScreen() {
           onSaved={() => load()}
         />
       )}
+      {listenerCredential && <ListenerKeyModal credential={listenerCredential} onClose={() => setListenerCredential(null)} />}
     </div>
   );
 }

@@ -44,6 +44,13 @@ def run_migrations(engine: Engine) -> None:
             ")"
         ))
         conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS ai_runtime_settings ("
+            "id TEXT PRIMARY KEY, provider TEXT NOT NULL DEFAULT 'ollama', "
+            "model TEXT NOT NULL DEFAULT 'qwen3:4b', api_key_encrypted TEXT NOT NULL DEFAULT '', "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        ))
+        conn.execute(text(
             "CREATE TABLE IF NOT EXISTS evidence_sources ("
             "id TEXT PRIMARY KEY, "
             "source_key TEXT NOT NULL UNIQUE, "
@@ -163,6 +170,31 @@ def run_migrations(engine: Engine) -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_agent_id ON processing_jobs (agent_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_evidence_id ON processing_jobs (evidence_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_status ON processing_jobs (status)"))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS agent_access_keys ("
+            "id TEXT PRIMARY KEY, label TEXT NOT NULL UNIQUE, agent_id TEXT NOT NULL, key_hash TEXT NOT NULL, "
+            "revoked BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_used_at TIMESTAMPTZ NULL)"
+        ))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_access_keys_agent_id ON agent_access_keys (agent_id)"))
+        conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'"))
+        conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ"))
+        conn.execute(text("ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_memories_status ON memories (status)"))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS memory_revisions ("
+            "id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, changed_by TEXT NOT NULL DEFAULT 'system', "
+            "reason TEXT NOT NULL DEFAULT '', snapshot_json TEXT NOT NULL DEFAULT '{}', "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+        ))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_revisions_memory_id ON memory_revisions (memory_id)"))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS memory_conflicts ("
+            "id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, memory_id TEXT NOT NULL, conflicting_memory_id TEXT NOT NULL, "
+            "reason TEXT NOT NULL DEFAULT '', confidence FLOAT NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'open', "
+            "resolved_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_at TIMESTAMPTZ NULL)"
+        ))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_conflicts_agent_id ON memory_conflicts (agent_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_conflicts_status ON memory_conflicts (status)"))
 
         for table in _AGENT_ID_TABLES:
             conn.execute(text(

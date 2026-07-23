@@ -4,8 +4,10 @@ import hmac
 import re
 import secrets
 import time
+from datetime import datetime, timezone
 from app.core.config import MEMORYGATE_ADMIN_KEY
 from app.models.auth_setting import AuthSetting
+from app.models.agent_access_key import AgentAccessKey
 
 _PBKDF2_ROUNDS = 200_000
 _SINGLETON_ID = "singleton"
@@ -79,6 +81,27 @@ def set_admin_key(db, key: str) -> None:
 
 def generate_admin_key(length: int = 24) -> str:
     return secrets.token_urlsafe(length)[:length]
+
+
+def create_agent_access_key(db, label: str, agent_id: str) -> tuple[AgentAccessKey, str]:
+    key = f"mg_read_{secrets.token_urlsafe(24)}"
+    row = AgentAccessKey(label=label, agent_id=agent_id, key_hash=_hash_key(key))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row, key
+
+
+def verify_agent_access_key(db, key: str | None, agent_id: str) -> bool:
+    if not key:
+        return False
+    rows = db.query(AgentAccessKey).filter(AgentAccessKey.agent_id == agent_id, AgentAccessKey.revoked.is_(False)).all()
+    for row in rows:
+        if _verify_key(key, row.key_hash):
+            row.last_used_at = datetime.now(timezone.utc)
+            db.commit()
+            return True
+    return False
 
 
 def get_lockout_status(scope: str) -> int:

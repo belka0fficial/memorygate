@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.DEV
+export const API_BASE_URL = import.meta.env.DEV
   ? '/api'
   : `${window.location.protocol}//${window.location.hostname}:8020`;
 
@@ -20,7 +20,7 @@ export class UnauthorizedError extends Error {}
 
 async function request(method, path, { body, params, agentId } = {}) {
   const key = getStoredKey();
-  const url = new URL(BASE_URL + path, window.location.origin);
+  const url = new URL(API_BASE_URL + path, window.location.origin);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);

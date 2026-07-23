@@ -6,7 +6,9 @@ from app.core.db import SessionLocal
 from app.core.agent import get_agent_id, resolve_agent_id
 from app.models.memory import Memory
 from app.models.audit import MemoryAudit
-from app.schemas.memory import MemoryWriteRequest, MemorySearchRequest, MemoryPatchRequest
+from app.models.memory_revision import MemoryRevision
+from app.models.memory_conflict import MemoryConflict
+from app.schemas.memory import MemoryWriteRequest, MemorySearchRequest, MemoryPatchRequest, ConflictResolveRequest
 from app.services.classifier import classify_memory, normalize_memory_type, CURRENT_MEMORY_TYPES
 from app.services.signal_filter import score_value, novelty_bucket, NOVELTY_DUPLICATE, NOVELTY_LOW
 from app.services.agent_config_service import get_or_create_config
@@ -17,6 +19,7 @@ from app.services.qdrant_store import (
     delete_memory_embedding,
 )
 from app.services.scoring import memory_rank_bonus, memory_strength
+from app.services.memory_truth import add_revision, detect_conflicts
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
@@ -46,6 +49,9 @@ def _row_to_dict(row, score=None):
         "do_not_generalize": row.do_not_generalize,
         "review_by": row.review_by.isoformat() if row.review_by else None,
         "tags": json.loads(row.tags_json),
+        "status": row.status,
+        "valid_from": row.valid_from.isoformat() if row.valid_from else None,
+        "valid_until": row.valid_until.isoformat() if row.valid_until else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -61,6 +67,60 @@ def _merge_tags(old_tags: list[str], new_tags: list[str]) -> list[str]:
             seen.add(tag)
             merged.append(tag)
     return merged
+
+
+@router.get("/conflicts")
+def list_conflicts(agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        rows = db.execute(select(MemoryConflict).where(MemoryConflict.agent_id == agent_id).order_by(MemoryConflict.created_at.desc())).scalars().all()
+        return {"results": [{"id": row.id, "memory_id": row.memory_id, "conflicting_memory_id": row.conflicting_memory_id,
+                              "reason": row.reason, "confidence": row.confidence, "status": row.status,
+                              "created_at": row.created_at.isoformat() if row.created_at else None} for row in rows]}
+    finally:
+        db.close()
+
+
+@router.get("/{memory_id}/revisions")
+def memory_revisions(memory_id: str, agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        memory = db.get(Memory, memory_id)
+        if not memory or memory.agent_id != agent_id:
+            raise HTTPException(404, "Memory not found")
+        rows = db.execute(select(MemoryRevision).where(MemoryRevision.memory_id == memory_id).order_by(MemoryRevision.created_at.desc())).scalars().all()
+        return {"results": [{"id": row.id, "changed_by": row.changed_by, "reason": row.reason,
+                              "snapshot": json.loads(row.snapshot_json or "{}"), "created_at": row.created_at.isoformat() if row.created_at else None} for row in rows]}
+    finally:
+        db.close()
+
+
+@router.post("/conflicts/{conflict_id}/resolve")
+def resolve_conflict(conflict_id: str, payload: ConflictResolveRequest, agent_id: str = Depends(get_agent_id)):
+    db = SessionLocal()
+    try:
+        conflict = db.get(MemoryConflict, conflict_id)
+        if not conflict or conflict.agent_id != agent_id:
+            raise HTTPException(404, "Conflict not found")
+        if payload.winner_memory_id not in (conflict.memory_id, conflict.conflicting_memory_id):
+            raise HTTPException(422, "Winner must be one of the conflicted memories")
+        winner = db.get(Memory, payload.winner_memory_id)
+        loser = db.get(Memory, conflict.conflicting_memory_id if payload.winner_memory_id == conflict.memory_id else conflict.memory_id)
+        if winner:
+            winner.status = "active"
+            winner.valid_until = None
+            add_revision(db, winner, "selected during conflict resolution", "user")
+        if loser:
+            loser.status = "needs_review"
+            loser.valid_until = datetime.now(timezone.utc)
+            add_revision(db, loser, "not selected during conflict resolution", "user")
+        conflict.status = "resolved"
+        conflict.resolved_by = "user"
+        conflict.resolved_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "ok", "winner_memory_id": payload.winner_memory_id}
+    finally:
+        db.close()
 
 def _upgrade_existing_memory(db, row, payload, final_memory_type, final_confidence, final_summary):
     old_tags = json.loads(row.tags_json)
@@ -82,6 +142,7 @@ def _upgrade_existing_memory(db, row, payload, final_memory_type, final_confiden
         upgraded = True
 
     if upgraded:
+        add_revision(db, row, "duplicate upgraded existing memory", "dedup")
         db.add(MemoryAudit(
             action="upgrade",
             memory_id=row.id,
@@ -200,10 +261,14 @@ def write_memory(payload: MemoryWriteRequest, header_agent_id: str = Depends(get
             do_not_generalize=final_do_not_generalize,
             review_by=final_review_by,
             tags_json=json.dumps(payload.tags),
+            valid_from=datetime.now(timezone.utc),
         )
         db.add(memory)
         db.commit()
         db.refresh(memory)
+        add_revision(db, memory, "memory created", "write")
+        detect_conflicts(db, memory)
+        db.commit()
 
         upsert_memory_embedding(
             memory.id,
@@ -321,6 +386,7 @@ def patch_memory(memory_id: str, payload: MemoryPatchRequest, agent_id: str = De
         if not row or row.agent_id != agent_id:
             raise HTTPException(404, "Memory not found")
 
+        add_revision(db, row, "before manual edit", "user")
         if payload.text is not None:
             row.text = payload.text
         if payload.memory_type is not None:
@@ -357,6 +423,7 @@ def patch_memory(memory_id: str, payload: MemoryPatchRequest, agent_id: str = De
         )
 
         db.add(MemoryAudit(action="edit", memory_id=row.id, payload_json=json.dumps({"text": row.text})))
+        detect_conflicts(db, row)
         db.commit()
 
         return {"status": "ok", "memory": _row_to_dict(row)}

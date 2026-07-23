@@ -1,0 +1,40 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from app.schemas.runtime import IngestEventRequest
+from app.services import backup_service
+from app.services.auth_settings_service import _hash_key, _verify_key, validate_new_admin_key
+
+
+class SecurityAndRuntimeContractTests(unittest.TestCase):
+    def test_admin_key_policy_rejects_weak_values(self):
+        self.assertEqual(validate_new_admin_key("short"), "New key must be at least 14 characters long.")
+        self.assertIsNotNone(validate_new_admin_key("longpasswordwithoutdigits!"))
+        self.assertIsNone(validate_new_admin_key("Correct-Horse-9-Battery"))
+
+    def test_key_hash_verification_is_not_plaintext(self):
+        encoded = _hash_key("Correct-Horse-9-Battery")
+        self.assertNotIn("Correct-Horse-9-Battery", encoded)
+        self.assertTrue(_verify_key("Correct-Horse-9-Battery", encoded))
+        self.assertFalse(_verify_key("wrong-key", encoded))
+
+    def test_listener_contract_does_not_require_redundant_source_key(self):
+        event = IngestEventRequest(content="webhook event")
+        self.assertEqual(event.source_key, "")
+        self.assertTrue(event.auto_process)
+
+    def test_backup_path_cannot_escape_backup_directory(self):
+        previous = backup_service.BACKUP_DIR
+        with tempfile.TemporaryDirectory() as directory:
+            backup_service.BACKUP_DIR = directory
+            path = Path(directory) / "memorygate-valid.json"
+            path.write_text("{}", encoding="utf-8")
+            self.assertEqual(backup_service.resolve_backup(path.name), path)
+            with self.assertRaises(FileNotFoundError):
+                backup_service.resolve_backup("../../outside.json")
+        backup_service.BACKUP_DIR = previous
+
+
+if __name__ == "__main__":
+    unittest.main()

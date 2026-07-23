@@ -8,3 +8,7 @@ from .analysis_object import AnalysisObject
 from .episode_object import EpisodeObject
 from .object_link import ObjectLink
 from .processing_job import ProcessingJob
+from .agent_access_key import AgentAccessKey
+from .memory_revision import MemoryRevision
+from .memory_conflict import MemoryConflict
+from .ai_runtime_setting import AiRuntimeSetting

@@ -15,6 +15,7 @@ from app.routes.auth_settings import router as auth_settings_router
 from app.routes.evidence import router as evidence_router
 from app.routes.lineage import router as lineage_router
 from app.routes.runtime import router as runtime_router
+from app.routes.system import router as system_router
 from app.models import memory, audit, agent_config
 from app.models import auth_setting
 from app.models import evidence_source, evidence_object, analysis_object
@@ -24,8 +25,10 @@ from app.models import entity
 from app.models import observation
 from app.models import pattern
 from app.models import session_transcript
+from app.models import ai_runtime_setting
 from app.services.qdrant_store import ensure_qdrant_collection, ensure_observation_collection, ensure_entity_collection
 from app.services.embeddings import get_embedding_model, embed_text
+from app.services.processing_worker import start_worker, stop_worker
 
 app = FastAPI(title="MemoryGate")
 
@@ -48,6 +51,11 @@ def startup():
     ensure_entity_collection()
     get_embedding_model()
     embed_text("warmup")
+    start_worker()
+
+@app.on_event("shutdown")
+def shutdown():
+    stop_worker()
 
 @app.get("/health")
 def health():
@@ -62,7 +70,8 @@ _auth = [Depends(require_key)]
 app.include_router(auth_settings_router, dependencies=_auth)
 app.include_router(evidence_router, dependencies=_auth)
 app.include_router(lineage_router, dependencies=_auth)
-app.include_router(runtime_router, dependencies=_auth)
+app.include_router(runtime_router)
+app.include_router(system_router, dependencies=_auth)
 app.include_router(memory_router, dependencies=_auth)
 app.include_router(audit_router, dependencies=_auth)
 app.include_router(entity_router, dependencies=_auth)

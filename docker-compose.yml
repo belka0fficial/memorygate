@@ -22,6 +22,34 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  ollama:
+    image: ollama/ollama
+    container_name: memorygate-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  api:
+    build: ./services/api
+    container_name: memorygate-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://memorygate:memorygate_dev_password@postgres:5432/memorygate
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: http://ollama:11434
+    ports:
+      - "8020:8020"
+    volumes:
+      - memorygate_backups:/data/backups
+    depends_on:
+      - postgres
+      - qdrant
+      - ollama
+
 volumes:
   postgres_data:
   qdrant_data:
+  ollama_data:
+  memorygate_backups:

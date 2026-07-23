@@ -10,6 +10,8 @@ from app.models.processing_job import ProcessingJob
 from app.services.classifier import classify_memory
 from app.services.signal_filter import score_value
 from app.services.qdrant_store import upsert_memory_embedding
+from app.services.ollama_service import analyze_evidence
+from app.services.memory_truth import add_revision, detect_conflicts
 
 
 def _link(db, source_type, source_id, target_type, target_id, relationship, confidence=1.0):
@@ -27,10 +29,15 @@ def _link(db, source_type, source_id, target_type, target_id, relationship, conf
     return row
 
 
-def process_evidence(db, evidence: EvidenceObject, content: str) -> dict:
-    job = ProcessingJob(agent_id=evidence.agent_id, evidence_id=evidence.id, status="processing", attempts=1, stage="episode")
-    db.add(job)
-    db.flush()
+def process_evidence(db, evidence: EvidenceObject, content: str, job: ProcessingJob | None = None) -> dict:
+    if job is None:
+        job = ProcessingJob(agent_id=evidence.agent_id, evidence_id=evidence.id, status="pending")
+        db.add(job)
+        db.flush()
+    job.status = "processing"
+    job.attempts += 1
+    job.stage = "episode"
+    db.commit()
     try:
         cutoff = (evidence.occurred_at or datetime.now(timezone.utc)) - timedelta(minutes=30)
         episode = db.execute(select(EpisodeObject).where(
@@ -65,6 +72,21 @@ def process_evidence(db, evidence: EvidenceObject, content: str) -> dict:
         db.flush()
         _link(db, "episode", episode.id, "analysis", analysis.id, "analyzed_into", analysis.confidence)
 
+        job.stage = "local_ai"
+        ai_result = analyze_evidence(content, evidence.source_type)
+        ai_analysis = None
+        if ai_result:
+            ai_analysis = AnalysisObject(
+                agent_id=evidence.agent_id, analysis_type="local_ai_proposal",
+                evidence_ids_json=json.dumps([evidence.id]), input_summary=content[:500],
+                output_summary=ai_result["summary"],
+                steps_json=json.dumps({"observations": ai_result["observations"], "memory_candidates": ai_result["memory_candidates"]}),
+                confidence=min(evidence.integrity_confidence, 0.7),
+            )
+            db.add(ai_analysis)
+            db.flush()
+            _link(db, "episode", episode.id, "analysis", ai_analysis.id, "proposed_by", ai_analysis.confidence)
+
         memory = None
         if value >= 0.3 and len(content.split()) >= 4:
             memory = db.execute(select(Memory).where(Memory.agent_id == evidence.agent_id, Memory.text.ilike(content.strip()))).scalar_one_or_none()
@@ -73,9 +95,12 @@ def process_evidence(db, evidence: EvidenceObject, content: str) -> dict:
                     agent_id=evidence.agent_id, text=content.strip(), summary=classification["summary"],
                     memory_type=classification["memory_type"], source_type="automatic_listener",
                     confidence=classification["confidence"], tags_json=evidence.tags_json,
+                    valid_from=datetime.now(timezone.utc),
                 )
                 db.add(memory)
                 db.flush()
+                add_revision(db, memory, "automatic listener promotion", "runtime")
+                detect_conflicts(db, memory)
                 try:
                     upsert_memory_embedding(memory.id, memory.text, payload={"agent_id": evidence.agent_id, "memory_type": memory.memory_type})
                 except Exception:
@@ -85,7 +110,7 @@ def process_evidence(db, evidence: EvidenceObject, content: str) -> dict:
         evidence.processing_state = "processed"
         job.status = "completed"
         job.stage = "complete"
-        result = {"episode_id": episode.id, "analysis_id": analysis.id, "memory_id": memory.id if memory else None, "value_score": value}
+        result = {"episode_id": episode.id, "analysis_id": analysis.id, "ai_analysis_id": ai_analysis.id if ai_analysis else None, "memory_id": memory.id if memory else None, "value_score": value}
         job.result_json = json.dumps(result)
         db.commit()
         return result

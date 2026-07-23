@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, Boxes, Brain, Braces, CalendarRange, Database, Eye, FileText, Gauge, MoreHorizontal, Radio, Settings, Share2, Sparkles, TrendingUp, Waypoints } from 'lucide-react';
+import { Activity, Boxes, Brain, Braces, CalendarRange, Database, Eye, FileText, FlaskConical, Gauge, MoreHorizontal, Radio, Settings, Share2, Sparkles, TrendingUp, Waypoints } from 'lucide-react';
 import Logo from './Logo';
 
 const NAV_GROUPS = [
@@ -8,6 +8,7 @@ const NAV_GROUPS = [
     { to: '/overview', label: 'Command Center', icon: Gauge },
     { to: '/pipeline', label: 'Live Pipeline', icon: Activity },
     { to: '/runtime', label: 'Agent Runtime', icon: Brain },
+    { to: '/lab', label: 'Memory Lab', icon: FlaskConical },
     { to: '/windows', label: 'Memory Windows', icon: Boxes },
     { to: '/briefing', label: 'Realtime Context', icon: Radio },
   ] },

@@ -5,7 +5,6 @@ import { api } from '../lib/api';
 import { useAgent } from '../context/AgentContext';
 import { scopeAgentIds } from '../lib/agentScope';
 import { timeAgo } from '../lib/timeAgo';
-import AgentDot from '../components/AgentDot';
 
 const FEED_COLORS = {
   memory: '#3B82F6',
@@ -15,13 +14,12 @@ const FEED_COLORS = {
   clarification: '#EC4899',
 };
 
-function StatCard({ label, value, agentIds }) {
+function StatCard({ label, value }) {
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
       <div className="text-2xl font-semibold text-text">{value}</div>
       <div className="mt-1 flex items-center gap-2 text-xs text-muted">
         {label}
-        {agentIds.length === 1 && <AgentDot agentId={agentIds[0]} />}
       </div>
     </div>
   );
@@ -173,10 +171,10 @@ export default function OverviewScreen() {
       </div>
 
       <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Total Memories" value={totalMemories} agentIds={agentIds} />
-        <StatCard label="Total Entities" value={totalEntities} agentIds={agentIds} />
-        <StatCard label="Active Patterns" value={totalActivePatterns} agentIds={agentIds} />
-        <StatCard label="Pending Clarifications" value={totalPendingClar} agentIds={agentIds} />
+        <StatCard label="Total Memories" value={totalMemories} />
+        <StatCard label="Total Entities" value={totalEntities} />
+        <StatCard label="Active Patterns" value={totalActivePatterns} />
+        <StatCard label="Pending Clarifications" value={totalPendingClar} />
       </div>
 
       <Section title="Memory architecture state" note="High-level health across long-term knowledge, entity structure, and signal processing.">
@@ -208,9 +206,6 @@ export default function OverviewScreen() {
             <div key={i} className={`flex items-center gap-4 px-4 py-3 text-sm ${i > 0 ? 'border-t border-border' : ''}`}>
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: FEED_COLORS[item.type] }} />
               <span className="min-w-0 flex-1 text-text/90">{item.text}</span>
-              <div className="hidden shrink-0 sm:block">
-                <AgentDot agentId={item.agentId} showLabel />
-              </div>
               <span className="shrink-0 text-xs text-muted">{timeAgo(item.timestamp)}</span>
             </div>
           ))

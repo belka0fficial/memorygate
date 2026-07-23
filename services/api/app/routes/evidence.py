@@ -1,4 +1,5 @@
 import json
+import secrets
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
@@ -97,6 +98,26 @@ def upsert_source(payload: EvidenceSourceUpsertRequest):
         db.commit()
         db.refresh(row)
         return _source_to_dict(row)
+    finally:
+        db.close()
+
+
+@router.post("/sources/{source_key}/rotate-ingest-key")
+def rotate_ingest_key(source_key: str):
+    """Replace a listener credential and return it exactly once."""
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(EvidenceSource).where(EvidenceSource.source_key == source_key.strip().lower())
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, "Evidence source not found")
+        values = json.loads(row.secret_json or "{}")
+        key = f"mg_listener_{secrets.token_urlsafe(24)}"
+        values["ingest_key"] = key
+        row.secret_json = json.dumps(values)
+        db.commit()
+        return {"source_key": row.source_key, "ingest_key": key}
     finally:
         db.close()
 

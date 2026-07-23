@@ -20,6 +20,7 @@ import PipelineScreen from './screens/PipelineScreen';
 import WindowsScreen from './screens/WindowsScreen';
 import EpisodesScreen from './screens/EpisodesScreen';
 import RuntimeScreen from './screens/RuntimeScreen';
+import MemoryLabScreen from './screens/MemoryLabScreen';
 
 function Gate() {
   const { authed, checking } = useAuth();
@@ -43,6 +44,7 @@ function Gate() {
             <Route path="/overview" element={<OverviewScreen />} />
             <Route path="/pipeline" element={<PipelineScreen />} />
             <Route path="/runtime" element={<RuntimeScreen />} />
+            <Route path="/lab" element={<MemoryLabScreen />} />
             <Route path="/windows" element={<WindowsScreen />} />
             <Route path="/database" element={<DatabaseScreen />} />
             <Route path="/beliefs" element={<BeliefsScreen />} />

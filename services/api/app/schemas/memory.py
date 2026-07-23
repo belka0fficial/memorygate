@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class MemoryWriteRequest(BaseModel):
     agent_id: str | None = None
@@ -21,6 +21,10 @@ class MemoryPatchRequest(BaseModel):
     do_not_generalize: bool | None = None
     review_by: str | None = None
     tags: list[str] | None = None
+
+
+class ConflictResolveRequest(BaseModel):
+    winner_memory_id: str = Field(min_length=1)
 
 class MemoryResponse(BaseModel):
     id: str

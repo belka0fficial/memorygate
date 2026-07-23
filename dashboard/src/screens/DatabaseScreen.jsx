@@ -51,9 +51,9 @@ export default function DatabaseScreen() {
       return [...memories.map((v) => normalize('memory', v)), ...entities.map((v) => normalize('entity', v)), ...observations.map((v) => normalize('observation', v)), ...patterns.map((v) => normalize('pattern', v)), ...transcripts.map((v) => normalize('transcript', v))];
     }));
     const [evidence, episodes, analysis] = await Promise.all([
-      safe(api.get('/evidence', { limit: 300 }).then((r) => r.results)),
+      Promise.all(agentIds.map((id) => safe(api.get('/evidence', { limit: 300 }, id).then((r) => r.results)))).then((rows) => rows.flat()),
       Promise.all(agentIds.map((id) => safe(api.get('/lineage/episodes', { limit: 300 }, id).then((r) => r.results)))).then((rows) => rows.flat()),
-      safe(api.get('/evidence/analysis', { limit: 300 }).then((r) => r.results)),
+      Promise.all(agentIds.map((id) => safe(api.get('/evidence/analysis', { limit: 300 }, id).then((r) => r.results)))).then((rows) => rows.flat()),
     ]);
     setRows([...scoped.flat(), ...evidence.map((v) => normalize('evidence', v)), ...episodes.map((v) => normalize('episode', v)), ...analysis.map((v) => normalize('analysis', v))]);
     setLoading(false);
@@ -108,13 +108,12 @@ export default function DatabaseScreen() {
 
       <div className="database-table-wrap">
         <table className="database-table">
-          <thead><tr><th>Object</th><th>Type</th><th>Confidence</th><th>Owner</th><th>Last change</th><th /></tr></thead>
+          <thead><tr><th>Object</th><th>Type</th><th>Confidence</th><th>Last change</th><th /></tr></thead>
           <tbody>
             {visible.map((row) => <tr key={`${row.kind}-${row.id}`} onClick={() => setSelected(row)}>
               <td><strong>{row.title}</strong><span>{row.subtitle || row.id}</span></td>
               <td><span className={`object-kind kind-${row.kind}`}>{row.kind}</span></td>
               <td className="mono-cell">{row.confidence}</td>
-              <td>{row.agentId || 'system'}</td>
               <td>{row.updated || row.created ? new Date(row.updated || row.created).toLocaleString() : 'unknown'}</td>
               <td><ChevronRight size={15} /></td>
             </tr>)}
